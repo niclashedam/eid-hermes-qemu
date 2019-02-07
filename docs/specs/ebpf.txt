@@ -1,0 +1,182 @@
+
+EBPF device
+===========
+
+Copyright (c) 2019 Martin Ichilevici de Oliveira
+
+This document is licensed under the GPLv2 (or later).
+
+eBPF is a Linux kernel instruction set architecture and virtual machine
+specification, which can be used to insert code in the kernel at runtime. One
+of the use-cases is offloading eBPF to external devices. This is an example of
+a PCI device that can execute eBPF, using the uBPF library
+(https://github.com/iovisor/ubpf)
+
+A sample library is provided in https://github.com/iomartin/pci_ubpf_driver
+
+PCI specs
+---------
+
+PCI ID: 1de5:3000
+
+PCI Region 4:
+  ------------------------------------------------
+ |1MB|                  15MB                      |
+  ------------------------------------------------
+   ^                      ^
+   |-- I/O area           |-- RAM area
+
+I/O area spec
+-------------
+Used to program the device. See the commands section below.
+0x0: Opcode (1 byte)
+0x1: Control (start/stop the eBPF command) (1 byte)
+0x4: Length (4 bytes)
+0x8: Offset to write data to (from the start of the ".text" or ".data" segment)
+     (4 bytes)
+0xc: Source address (given as host address) (8 bytes)
+
+RAM area spec
+---------------
+0x100000: size of the ".text" segment
+0x100004: size of the ".data" segment
+0x100100: start of the ".text" segment (where the eBPF program will be stored)
+0x200000: eBPF program return code
+0x200004: 1 if eBPF program finished, 0 otherwise
+0x200008: eBPF registers (16 * uint64_t)
+0x400000: start of the ".data" segment (where the program's input will be
+          stored)
+0x800000: start of the p2pdma area
+
+Commands
+--------
+The device can receive the following commands, by writing to the begining of
+the I/O area:
+
+0x00: DMA_TEXT:      DMA the ".text" from the host to address 0x1000 of the
+                     device
+0x01: MOVE_P2P_TEXT: Copy the ".text" from 0x800000 to 0x1000
+0x02: DMA_DATA:      DMA the ".data" from the host to address 0x400000 of the
+                     device
+0x03: MOVE_P2P_DATA: Copy the ".data" from 0x800000 to 0x400000
+0x04: RUN_PROG:      Start program execution
+0xff: DUMP_MEM:      Print the ".text" and ".data" segments (for debugging, not
+                     transferred to the host)
+
+To program a device, the user must first transfer the eBPF program and,
+optionally, the data, to the device.  This can be done by either regular DMA
+(0x00 or 0x02) or by first using P2P-DMA to copy data to the p2pdma area and
+then issuing the 0x01 or 0x03 commands to tell the device to copy from the
+p2pdma area to the ".text" or ".data" regions, respectively.
+
+Then, it must issue the RUN_PROG command to start execution.
+
+For example, one could program the ".text" with:
+
+static int do_dma(struct pci_ubpf_dev *p, uint8_t opcode, unsigned long addr, unsigned long nbytes)
+{
+    int ret = 0;
+    int n_user_pages, n_sg;
+    unsigned i, offset = 0;
+    struct device *dev = &p->pdev->dev;
+    unsigned long first_page = (addr & PAGE_MASK) >> PAGE_SHIFT;
+    unsigned long last_page = ((addr + nbytes - 1) & PAGE_MASK) >> PAGE_SHIFT;
+    unsigned first_page_offset = offset_in_page(addr);
+    unsigned npages = last_page - first_page + 1;
+    struct page **pages;
+    struct scatterlist *sgl, *sg;
+
+    pages = kmalloc_array(npages, sizeof(*pages), GFP_KERNEL);
+    if (unlikely(!pages)) {
+        ret = -ENOMEM;
+        goto out;
+    }
+
+    n_user_pages = get_user_pages_fast(addr, npages, 0, pages);
+    if (n_user_pages < 0) {
+        dev_err(dev, "Failed at get_user_pages(): %d\n", n_user_pages);
+        ret = n_user_pages;
+        goto out_free_pages;
+    }
+
+    sgl = kmalloc_array(n_user_pages, sizeof(struct scatterlist), GFP_KERNEL);
+    if (unlikely(!sgl)) {
+        ret = -ENOMEM;
+        goto out_free_pages;
+    }
+
+    sg_init_table(sgl, n_user_pages);
+    /* first page */
+    sg_set_page(&sgl[0], pages[0], nbytes < (PAGE_SIZE - first_page_offset) ? nbytes : (PAGE_SIZE -first_page_offset) /* len */, offset_in_page(addr));
+    /* middle pages */
+    for(int i = 1; i < n_user_pages - 1; i++)
+        sg_set_page(&sgl[i], pages[i], PAGE_SIZE, 0);
+    /* last page */
+    if (n_user_pages > 1)
+        sg_set_page(&sgl[n_user_pages-1], pages[n_user_pages-1], nbytes - (PAGE_SIZE - first_page_offset) - ((n_user_pages-2)*PAGE_SIZE), 0);
+
+    n_sg = dma_map_sg(dev, sgl, n_user_pages, DMA_TO_DEVICE);
+    if (n_sg == 0) {
+        ret = -EIO;
+        goto out_free_sgl;
+    }
+    for_each_sg(sgl, sg, n_sg, i) {
+        writeb(opcode,             p->registers.opcode);
+        writel(sg_dma_len(sg),     p->registers.length);
+        writeq(sg_dma_address(sg), p->registers.addr);
+        writel(offset,             p->registers.offset);
+        offset += sg_dma_len(sg);
+        writeb(EBPF_CTRL_START,    p->registers.ctrl);
+
+        /* Check if DMA is finished. This bit will be set by the device */
+        if (!watch_and_sleep(p->registers.ctrl, EBPF_CTRL_DMA_DONE, 100)) {
+            dev_err(dev, "DMA timed out\n");
+            ret = -ETIME;
+            break;
+        }
+    }
+    for (int i = 0; i < n_user_pages; i++) {
+        put_page(pages[i]);
+    }
+
+    dma_unmap_sg(dev, sgl, n_user_pages, DMA_TO_DEVICE);
+out_free_sgl:
+    kfree(sgl);
+out_free_pages:
+    kfree(pages);
+out:
+    return ret;
+}
+
+And it can start execution with
+
+/*
+ * We can "move" the start of the ".data" segment by specifing an offset
+ * (from the beginning of ".data")
+ */
+static int run_program(struct pci_ubpf_dev *p, uint64_t offset)
+{
+    int finished;
+    volatile uint8_t *ready = p->mmio + 0x200004;
+
+    writeb(0x04,   p->registers.opcode);
+    writel(offset, p->registers.offset);
+    writeb(0x1,    p->registers.ctrl);
+
+    finished = watch_and_sleep(ready, 0x1, 100);
+
+    return finished ? readq(p->registers.ret) : -ETIME;
+}
+
+static inline bool watch_and_sleep(volatile uint8_t *ptr, uint8_t mask, unsigned long ms)
+{
+    unsigned iters = 100;
+    unsigned long time_per_iter = ms/iters;
+
+    for (unsigned i = 0; i < iters; i++) {
+        if ((readb(ptr) & mask))
+            return 1;
+        msleep(time_per_iter);
+    }
+    return 0;
+}
