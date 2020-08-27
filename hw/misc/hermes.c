@@ -37,6 +37,7 @@
 #include "qemu/main-loop.h" /* iothread mutex */
 #include "qapi/visitor.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include <ubpf.h>
 #include <elf.h>
 
@@ -80,8 +81,34 @@
 #define HERMES_RAM_OFFSET         (0x0)
 #define HERMES_MMIO_OFFSET        (0 * MiB)
 
+#define HERMES_EHVER     0x00
+#define HERMES_EHTS      0x04
+#define HERMES_EHENG     0x08
+#define HERMES_EHPSLOT   0x09
+#define HERMES_EHDSLOT   0x0A
+#define HERMES_EHDSOFF   0x0C
+#define HERMES_EHDSSZE   0x10
+#define HERMES_EHPSOFF   0x14
+#define HERMES_EHPSSZE   0x18
+
+struct hermes_bar0 {
+    uint32_t ehver;
+    uint32_t ehts;
+
+    uint8_t eheng;
+    uint8_t ehpslot;
+    uint8_t ehdslot;
+    uint8_t rsv0;
+
+    uint32_t ehdsoff;
+    uint32_t ehdssze;
+    uint32_t ehpsoff;
+    uint32_t ehpssze;
+};
+
 typedef struct {
     PCIDevice pdev;
+    struct hermes_bar0 *bar0;
     MemoryRegion hermes_bar0;
     MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
@@ -399,7 +426,40 @@ static const MemoryRegionOps hermes_mmio_ops = {
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
 {
-    return 0;
+    HermesState *hermes = opaque;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case HERMES_EHVER:
+        val = hermes->bar0->ehver;
+        break;
+    case HERMES_EHTS:
+        val = hermes->bar0->ehts;
+        break;
+    case HERMES_EHENG:
+        val = hermes->bar0->eheng;
+        break;
+    case HERMES_EHPSLOT:
+        val = hermes->bar0->ehpslot;
+        break;
+    case HERMES_EHDSLOT:
+        val = hermes->bar0->ehdslot;
+        break;
+    case HERMES_EHDSOFF:
+        val = hermes->bar0->ehdsoff;
+        break;
+    case HERMES_EHDSSZE:
+        val = hermes->bar0->ehdssze;
+        break;
+    case HERMES_EHPSOFF:
+        val = hermes->bar0->ehpsoff;
+        break;
+    case HERMES_EHPSSZE:
+        val = hermes->bar0->ehpssze;
+        break;
+    }
+
+    return val;
 }
 
 static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
@@ -508,8 +568,32 @@ static void hermes_instance_init(Object *obj)
     HermesState *hermes = HERMES(obj);
 
     hermes->dma_mask = ~0ULL; /* 64-bit */
+    hermes->bar0 = malloc(sizeof(*hermes->bar0));
+    if (hermes->bar0) {
+        hermes->bar0->ehver = 1;
+        hermes->bar0->ehts = 1602198883;
+        hermes->bar0->eheng = 1;
+        hermes->bar0->ehpslot = 16;
+        hermes->bar0->ehdslot = 128;
+
+        hermes->bar0->ehdsoff = 0;
+        hermes->bar0->ehdssze = 16 * MiB;
+        hermes->bar0->ehpsoff = hermes->bar0->ehdssze *
+                                (1 + hermes->bar0->ehdslot);
+        hermes->bar0->ehpssze = 1 * MiB;
+    } else {
+        fprintf(stderr, "Failed to allocate memory for BAR 0\n");
+    }
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &hermes->dma_mask, OBJ_PROP_FLAG_READWRITE);
+}
+
+static void hermes_instance_finalize(Object *obj)
+{
+    HermesState *hermes = HERMES(obj);
+    if (hermes->bar0) {
+        free(hermes->bar0);
+    }
 }
 
 static void hermes_class_init(ObjectClass *class, void *data)
@@ -535,6 +619,7 @@ static void pci_hermes_register_types(void)
         .parent        = TYPE_PCI_DEVICE,
         .instance_size = sizeof(HermesState),
         .instance_init = hermes_instance_init,
+        .instance_finalize = hermes_instance_finalize,
         .class_init    = hermes_class_init,
         .interfaces = interfaces,
     };
