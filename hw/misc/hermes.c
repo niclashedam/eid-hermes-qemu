@@ -73,6 +73,7 @@
 #define HERMES_READY              0x1
 #define DMA_DONE                  0x4
 
+#define HERMES_BAR0_SIZE          (32 * MiB)
 #define HERMES_BAR4_SIZE          (16 * MiB)
 #define HERMES_RAM_SIZE           HERMES_BAR4_SIZE
 #define HERMES_MMIO_SIZE          (1 * MiB)
@@ -81,6 +82,7 @@
 
 typedef struct {
     PCIDevice pdev;
+    MemoryRegion hermes_bar0;
     MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
     MemoryRegion hermes_mmio;
@@ -395,6 +397,30 @@ static const MemoryRegionOps hermes_mmio_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return 0;
+}
+
+static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
+                unsigned size)
+{
+}
+
+static const MemoryRegionOps hermes_bar0_ops = {
+    .read = hermes_bar0_read,
+    .write = hermes_bar0_write,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
 /*
  * We purposely use a thread, so that users are forced to wait for the status
  * register.
@@ -440,6 +466,12 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     qemu_cond_init(&hermes->thr_cond);
     qemu_thread_create(&hermes->thread, "hermes", hermes_cmd_thread,
                        hermes, QEMU_THREAD_JOINABLE);
+
+    memory_region_init_io(&hermes->hermes_bar0, OBJECT(hermes),
+                          &hermes_bar0_ops, hermes, "hermes-bar0",
+                          HERMES_BAR0_SIZE);
+    pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                     &hermes->hermes_bar0);
 
     memory_region_init(&hermes->hermes_bar4, OBJECT(hermes), "hermes-bar4",
                        HERMES_BAR4_SIZE);
