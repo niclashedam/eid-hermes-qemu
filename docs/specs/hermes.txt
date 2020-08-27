@@ -1,5 +1,5 @@
 
-EBPF device
+Hermes device
 ===========
 
 Copyright (c) 2019 Martin Ichilevici de Oliveira
