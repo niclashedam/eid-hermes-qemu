@@ -73,15 +73,15 @@
 #define HERMES_READY              0x1
 #define DMA_DONE                  0x4
 
-#define HERMES_BAR_SIZE           (16 * MiB)
-#define HERMES_RAM_SIZE           HERMES_BAR_SIZE
+#define HERMES_BAR4_SIZE          (16 * MiB)
+#define HERMES_RAM_SIZE           HERMES_BAR4_SIZE
 #define HERMES_MMIO_SIZE          (1 * MiB)
 #define HERMES_RAM_OFFSET         (0x0)
 #define HERMES_MMIO_OFFSET        (0 * MiB)
 
 typedef struct {
     PCIDevice pdev;
-    MemoryRegion hermes_bar;
+    MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
     MemoryRegion hermes_mmio;
 
@@ -441,20 +441,20 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     qemu_thread_create(&hermes->thread, "hermes", hermes_cmd_thread,
                        hermes, QEMU_THREAD_JOINABLE);
 
-    memory_region_init(&hermes->hermes_bar, OBJECT(hermes), "hermes-bar",
-                       HERMES_BAR_SIZE);
+    memory_region_init(&hermes->hermes_bar4, OBJECT(hermes), "hermes-bar4",
+                       HERMES_BAR4_SIZE);
     memory_region_init_ram(&hermes->hermes_ram, OBJECT(hermes), "hermes-ram",
                            HERMES_RAM_SIZE, &error_fatal);
     memory_region_init_io(&hermes->hermes_mmio, OBJECT(hermes),
                           &hermes_mmio_ops, hermes, "hermes-mmio",
                           HERMES_MMIO_SIZE);
-    memory_region_add_subregion_overlap(&hermes->hermes_bar, HERMES_RAM_OFFSET,
+    memory_region_add_subregion_overlap(&hermes->hermes_bar4, HERMES_RAM_OFFSET,
             &hermes->hermes_ram, 1);
-    memory_region_add_subregion_overlap(&hermes->hermes_bar, HERMES_MMIO_OFFSET,
-            &hermes->hermes_mmio, 2);
+    memory_region_add_subregion_overlap(&hermes->hermes_bar4,
+            HERMES_MMIO_OFFSET, &hermes->hermes_mmio, 2);
     pci_register_bar(pdev, 4,
             PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
-            &hermes->hermes_bar);
+            &hermes->hermes_bar4);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
