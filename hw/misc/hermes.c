@@ -104,12 +104,12 @@ struct hermes_bar0 {
     uint32_t ehdssze;
     uint32_t ehpsoff;
     uint32_t ehpssze;
+    MemoryRegion mem_reg;
 };
 
 typedef struct {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
-    MemoryRegion hermes_bar0;
     MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
     MemoryRegion hermes_mmio;
@@ -527,11 +527,11 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     qemu_thread_create(&hermes->thread, "hermes", hermes_cmd_thread,
                        hermes, QEMU_THREAD_JOINABLE);
 
-    memory_region_init_io(&hermes->hermes_bar0, OBJECT(hermes),
+    memory_region_init_io(&hermes->bar0->mem_reg, OBJECT(hermes),
                           &hermes_bar0_ops, hermes, "hermes-bar0",
                           HERMES_BAR0_SIZE);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
-                     &hermes->hermes_bar0);
+                     &hermes->bar0->mem_reg);
 
     memory_region_init(&hermes->hermes_bar4, OBJECT(hermes), "hermes-bar4",
                        HERMES_BAR4_SIZE);
