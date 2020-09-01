@@ -143,16 +143,26 @@ struct hermes_bar2_irq_reg {
     uint32_t chnl_vct_num1;           /* 0xA4 */
 };
 
+struct hermes_bar2_cfg_reg {
+    uint32_t identifier;          /* 0x00 */
+    uint32_t busdev;              /* 0x04 */
+    uint32_t pcie_mpl;            /* 0x08 */
+    uint32_t pcie_mrrs;           /* 0x0C */
+    uint32_t sysid;               /* 0x10 */
+    uint32_t msi_enable;          /* 0x14 */
+    uint32_t pcie_data_w;         /* 0x18 */
+    uint32_t pcie_ctrl;           /* 0x1C */
+    uint32_t axi_usr_mpl;         /* 0x40 */
+    uint32_t axi_usr_mrrs;        /* 0x44 */
+    uint32_t write_flush_timeout; /* 0x60 */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
     struct hermes_bar2_engine_reg c2h;
     struct hermes_bar2_irq_reg irq;
-    struct hermes_bar2_cfg cfg;
-    struct hermes_bar2_sgdma h2c_sgdma;
-    struct hermes_bar2_sgdma c2h_sgdma;
-    struct hermes_bar2_sgdma_common sgdma_common;
-    struct hermes_bar2_msix_pba msix_pba;
+    struct hermes_bar2_cfg_reg cfg;
 };
 
 typedef struct {
@@ -773,6 +783,93 @@ static uint64_t hermes_bar2_irq_write(struct hermes_bar2 *bar2, hwaddr addr,
     return val;
 }
 
+static uint64_t hermes_bar2_cfg_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_cfg_reg *reg = &bar2->cfg;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+        /* Only bits 15:0 are defined */
+        val = reg->busdev & 0xFFFF;
+        break;
+    case 0x08:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_mpl & 0x7;
+        break;
+    case 0x0C:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_mrrs & 0x7;
+        break;
+    case 0x10:
+        /* Only bits 15:0 are defined */
+        val = reg->sysid & 0xFFFF;
+        break;
+    case 0x14:
+        /* Only bits 2:0 are defined */
+        val = reg->msi_enable & 0x7;
+        break;
+    case 0x18:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_data_w & 0x7;
+        break;
+    case 0x1C:
+        /* Only bit 0 is defined */
+        val = reg->pcie_ctrl & 0x1;
+        break;
+    case 0x40:
+        /* Only bits 6:4 and 2:0 are defined */
+        val = reg->axi_usr_mpl & 0x77;
+        break;
+    case 0x44:
+        /* Only bits 6:4 and 2:0 are defined */
+        val = reg->axi_usr_mrrs & 0x77;
+        break;
+    case 0x60:
+        /* Only bits 4:0 are defined */
+        val = reg->write_flush_timeout & 0x1F;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_cfg_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                      uint32_t val)
+{
+    struct hermes_bar2_cfg_reg *reg = &bar2->cfg;
+    switch (addr) {
+    case 0x1C:
+        /* Only bit 0 is writable */
+        reg->pcie_ctrl = val & 0x1;
+        break;
+    case 0x40:
+        /* Only bits 2:0 are writable */
+        reg->axi_usr_mpl = (reg->axi_usr_mpl & ~0x7) & (val & 0x7);
+        break;
+    case 0x44:
+        /* Only bits 2:0 are writable */
+        reg->axi_usr_mrrs = (reg->axi_usr_mrrs & ~0x7) & (val & 0x7);
+        break;
+    case 0x60:
+        /* Only bits 4:0 are writable */
+        reg->write_flush_timeout = val & 0x1F;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
@@ -787,6 +884,9 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 0x2:
         val = hermes_bar2_irq_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x3:
+        val = hermes_bar2_cfg_read(hermes->bar2, addr & 0xFF);
         break;
     }
 
@@ -807,6 +907,9 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x2:
         val = hermes_bar2_irq_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x3:
+        val = hermes_bar2_cfg_write(hermes->bar2, addr & 0xFF, val);
         break;
     }
 }
@@ -952,6 +1055,17 @@ static void init_bar2(HermesState *hermes)
      */
 
     hermes->bar2->irq.identifier = (0x1FC << 20) | (0x2 << 16) | (0x5);
+
+    hermes->bar2->cfg.identifier = (0x1FC << 20) | (0x3 << 16) | (0x5);
+    hermes->bar2->cfg.busdev = 0;
+    hermes->bar2->cfg.pcie_mpl = 1; /* mpl = 256 bytes */
+    hermes->bar2->cfg.pcie_mrrs = 2; /* mrrs = 512 bytes */
+    hermes->bar2->cfg.sysid = 0x1234;
+    hermes->bar2->cfg.msi_enable = 2; /* MSI disabled, MSI-X enabled */
+    hermes->bar2->cfg.pcie_data_w = 3; /* 512 bits */
+    hermes->bar2->cfg.pcie_ctrl = 1;
+    hermes->bar2->cfg.axi_usr_mpl = (0x5 << 4) | (0x5);
+    hermes->bar2->cfg.axi_usr_mrrs = (0x5 << 4) | (0x5);
 }
 
 static void hermes_instance_init(Object *obj)
