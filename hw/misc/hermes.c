@@ -165,6 +165,12 @@ struct hermes_bar2_sgdma_reg {
     uint32_t desc_credits;   /* 0x8C */
 };
 
+struct hermes_bar2_sgdma_common_reg {
+    uint32_t identifier;              /* 0x00 */
+    uint32_t desc_ctrl;               /* 0x10, 0x14 and 0x18 */
+    uint32_t desc_credit_mode_enable; /* 0x20, 0x24 and 0x28 */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
@@ -173,7 +179,7 @@ struct hermes_bar2 {
     struct hermes_bar2_cfg_reg cfg;
     struct hermes_bar2_sgdma_reg h2c_sgdma;
     struct hermes_bar2_sgdma_reg c2h_sgdma;
-    struct hermes_bar2_sgdma_common sgdma_common;
+    struct hermes_bar2_sgdma_common_reg sgdma_common;
 };
 
 typedef struct {
@@ -953,6 +959,77 @@ static uint64_t hermes_bar2_sgdma_write(struct hermes_bar2 *bar2, hwaddr addr,
     return val;
 }
 
+static uint64_t hermes_bar2_sgdma_common_read(struct hermes_bar2 *bar2,
+                                              hwaddr addr)
+{
+    struct hermes_bar2_sgdma_common_reg *reg = &bar2->sgdma_common;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x10:
+    case 0x14:
+    case 0x18:
+        /* Only bits 19:16 and 3:0 are defined */
+        val = reg->desc_ctrl & 0xF000F;
+        break;
+    case 0x20:
+    case 0x24:
+    case 0x28:
+        /* Only bits 19:16 and 3:0 are defined */
+        val = reg->desc_credit_mode_enable & 0xF000F;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_common_write(struct hermes_bar2 *bar2,
+                                               hwaddr addr, uint32_t val)
+{
+    struct hermes_bar2_sgdma_common_reg *reg = &bar2->sgdma_common;
+
+    switch (addr) {
+    case 0x10:
+        /* Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = val & 0xF000F;
+        break;
+    case 0x14:
+        /* W1S. Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = W1S(reg->desc_ctrl, val & 0xF000F);
+        break;
+    case 0x18:
+        /* W1C. Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = W1C(reg->desc_ctrl, val & 0xF000F);
+        break;
+    case 0x20:
+        /* Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = val & 0xF000F;
+        break;
+    case 0x24:
+        /* W1S. Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = W1S(reg->desc_credit_mode_enable,
+                                           val & 0xF000F);
+        break;
+    case 0x28:
+        /* W1C. Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = W1C(reg->desc_credit_mode_enable,
+                                           val & 0xF000F);
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
@@ -976,6 +1053,9 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 0x5:
         val = hermes_bar2_sgdma_read(hermes->bar2, addr & 0xFF, false);
+        break;
+    case 0x6:
+        val = hermes_bar2_sgdma_common_read(hermes->bar2, addr & 0xFF);
         break;
     }
 
@@ -1005,6 +1085,9 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x5:
         val = hermes_bar2_sgdma_write(hermes->bar2, addr & 0xFF, val, false);
+        break;
+    case 0x6:
+        val = hermes_bar2_sgdma_common_write(hermes->bar2, addr & 0xFF, val);
         break;
     }
 }
@@ -1164,6 +1247,7 @@ static void init_bar2(HermesState *hermes)
 
     hermes->bar2->h2c_sgdma.identifier = (0x1FC << 20) | (0x4 << 16) | (0x5);
     hermes->bar2->c2h_sgdma.identifier = (0x1FC << 20) | (0x5 << 16) | (0x5);
+    hermes->bar2->sgdma_common.identifier = (0x1FC << 20) | (0x6 << 16) | (0x5);
 }
 
 static void hermes_instance_init(Object *obj)
