@@ -171,6 +171,18 @@ struct hermes_bar2_sgdma_common_reg {
     uint32_t desc_credit_mode_enable; /* 0x20, 0x24 and 0x28 */
 };
 
+struct hermes_bar2_msix_pba_reg {
+    uint32_t vec0_addr_low;   /* 0x00 */
+    uint32_t vec0_addr_high;  /* 0x04 */
+    uint32_t vec0_data;       /* 0x08 */
+    uint32_t vec0_ctrl;       /* 0x0C */
+    uint32_t vec31_addr_low;  /* 0x1F0 */
+    uint32_t vec31_addr_high; /* 0x1F4 */
+    uint32_t vec31_data;      /* 0x1F8 */
+    uint32_t vec31_ctrl;      /* 0x1FC */
+    uint32_t pba;             /* 0xFE0 */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
@@ -180,6 +192,7 @@ struct hermes_bar2 {
     struct hermes_bar2_sgdma_reg h2c_sgdma;
     struct hermes_bar2_sgdma_reg c2h_sgdma;
     struct hermes_bar2_sgdma_common_reg sgdma_common;
+    struct hermes_bar2_msix_pba_reg msix_pba;
 };
 
 typedef struct {
@@ -1030,6 +1043,88 @@ static uint64_t hermes_bar2_sgdma_common_write(struct hermes_bar2 *bar2,
     return val;
 }
 
+static uint64_t hermes_bar2_msix_pba_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_msix_pba_reg *reg = &bar2->msix_pba;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->vec0_addr_low;
+        break;
+    case 0x04:
+        val = reg->vec0_addr_high;
+        break;
+    case 0x08:
+        val = reg->vec0_data;
+        break;
+    case 0x0C:
+        val = reg->vec0_ctrl;
+        break;
+    case 0x1F0:
+        val = reg->vec31_addr_low;
+        break;
+    case 0x1F4:
+        val = reg->vec31_addr_high;
+        break;
+    case 0x1F8:
+        val = reg->vec31_data;
+        break;
+    case 0x1FC:
+        val = reg->vec31_ctrl;
+        break;
+    case 0xFE0:
+        val = reg->pba;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_msix_pba_write(struct hermes_bar2 *bar2,
+                                           hwaddr addr, uint32_t val)
+{
+    struct hermes_bar2_msix_pba_reg *reg = &bar2->msix_pba;
+    switch (addr) {
+    case 0x00:
+        reg->vec0_addr_low = val;
+        break;
+    case 0x04:
+        reg->vec0_addr_high = val;
+        break;
+    case 0x08:
+        reg->vec0_data = val;
+        break;
+    case 0x0C:
+        reg->vec0_ctrl = val;
+        break;
+    case 0x1F0:
+        reg->vec31_addr_low = val;
+        break;
+    case 0x1F4:
+        reg->vec31_addr_high = val;
+        break;
+    case 0x1F8:
+        reg->vec31_data = val;
+        break;
+    case 0x1FC:
+        reg->vec31_ctrl = val;
+        break;
+    case 0xFE0:
+        reg->pba = val;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
@@ -1056,6 +1151,9 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 0x6:
         val = hermes_bar2_sgdma_common_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x8:
+        val = hermes_bar2_msix_pba_read(hermes->bar2, addr & 0xFFF);
         break;
     }
 
@@ -1088,6 +1186,9 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x6:
         val = hermes_bar2_sgdma_common_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x8:
+        val = hermes_bar2_msix_pba_write(hermes->bar2, addr & 0xFFF, val);
         break;
     }
 }
@@ -1248,6 +1349,8 @@ static void init_bar2(HermesState *hermes)
     hermes->bar2->h2c_sgdma.identifier = (0x1FC << 20) | (0x4 << 16) | (0x5);
     hermes->bar2->c2h_sgdma.identifier = (0x1FC << 20) | (0x5 << 16) | (0x5);
     hermes->bar2->sgdma_common.identifier = (0x1FC << 20) | (0x6 << 16) | (0x5);
+    hermes->bar2->msix_pba.vec0_ctrl = 0xFFFFFFFF;
+    hermes->bar2->msix_pba.vec31_ctrl = 0xFFFFFFFF;
 }
 
 static void hermes_instance_init(Object *obj)
