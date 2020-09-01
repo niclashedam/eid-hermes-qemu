@@ -111,8 +111,26 @@ struct hermes_bar0 {
     MemoryRegion mem_reg;
 };
 
+struct hermes_bar2_engine_reg {
+    uint32_t identifier;         /* 0x00 */
+    uint32_t control;            /* 0x04, 0x08 and 0x0C */
+    uint32_t status;             /* 0x40 and 0x44 */
+    uint32_t cmp_desc_count;     /* 0x48 */
+    uint32_t alignment;          /* 0x4C */
+    uint32_t wb_addr_low;        /* 0x88 */
+    uint32_t wb_addr_high;       /* 0x8C */
+    uint32_t inter_enable_mask;  /* 0x90, 0x94 and 0x98 */
+    uint32_t pmc;                /* 0xC0 */
+    uint32_t pcc0;               /* 0xC4 */
+    uint32_t pcc1;               /* 0xC4 */
+    uint32_t pdc0;               /* 0xCC */
+    uint32_t pdc1;               /* 0xD0 */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
+    struct hermes_bar2_engine_reg h2c;
+    struct hermes_bar2_engine_reg c2h;
 };
 
 typedef struct {
@@ -490,9 +508,147 @@ static const MemoryRegionOps hermes_bar0_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
+static uint64_t hermes_bar2_engine_read(struct hermes_bar2 *bar2, hwaddr addr,
+                                        bool h2c)
 {
     uint64_t val = ~0ULL;
+
+    struct hermes_bar2_engine_reg *reg;
+    if (h2c) {
+        reg = &bar2->h2c;
+    } else {
+        reg = &bar2->c2h;
+    }
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+    case 0x08:
+    case 0x0C:
+        val = reg->control;
+        break;
+    case 0x40:
+        val = reg->status & 0xFFFFFF;
+        break;
+    case 0x44:
+        val = reg->status & 0xFFFFFF;
+        /* Clear on Read, except bit 0 */
+        reg->status = reg->status & 0x1;
+        break;
+    case 0x48:
+        val = reg->cmp_desc_count;
+        break;
+    case 0x4C:
+        val = reg->alignment & 0xFFFFFF;
+        break;
+    case 0x88:
+        val = reg->wb_addr_low;
+        break;
+    case 0x8C:
+        val = reg->wb_addr_high;
+        break;
+    case 0x90:
+    case 0x94:
+    case 0x98:
+        val = reg->inter_enable_mask & 0xFFFFFE;
+        break;
+    case 0xC0:
+        /* Bits 0 and 2 are RW, bit 1 is WO */
+        val = reg->pmc & 0x5;
+        break;
+    case 0xC4:
+        val = reg->pcc0;
+        break;
+    case 0xC8:
+        val = reg->pcc1 & 0xFFFF;
+        break;
+    case 0xCC:
+        val = reg->pdc0;
+        break;
+    case 0xD0:
+        val = reg->pdc1 & 0xFFFF;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                         uint32_t val, bool h2c)
+{
+    struct hermes_bar2_engine_reg *reg;
+
+    if (h2c) {
+        reg = &bar2->h2c;
+    } else {
+        reg = &bar2->c2h;
+    }
+
+    switch (addr) {
+    case 0x04:
+        reg->control = 0x0FFFFE7F & val;
+        break;
+    case 0x08:
+        /* W1S */
+        reg->control = W1S(reg->control, val);
+        break;
+    case 0x0C:
+        /* W1C */
+        reg->control = W1C(reg->control, val);
+        break;
+    case 0x40:
+        /* Bits 31:24 are not in the spec. Bit 0 is RO, bits 23:1 are RW1C */
+        reg->status = W1C(reg->status, val) & 0xFFFFFE;
+        break;
+    case 0x88:
+        reg->wb_addr_low = val;
+        break;
+    case 0x8C:
+        reg->wb_addr_high = val;
+        break;
+    case 0x90:
+        /* Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = reg->inter_enable_mask & 0xFFFFFE;
+        break;
+    case 0x94:
+        /* W1S. Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = W1S(reg->inter_enable_mask, val) & 0xFFFFFE;
+        break;
+    case 0x98:
+        /* W1C. Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = W1C(reg->inter_enable_mask, val) & 0xFFFFFE;
+        break;
+    case 0xC0:
+        /* Only bits 2:0 are in the spec */
+        reg->pmc = val & 0x7;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    HermesState *hermes = opaque;
+    uint64_t val = ~0ULL;
+
+    switch ((addr & 0xFFFF) >> 12) {
+    case 0x0:
+        val = hermes_bar2_engine_read(hermes->bar2, addr & 0xFF, true);
+        break;
+    case 0x1:
+        val = hermes_bar2_engine_read(hermes->bar2, addr & 0xFF, false);
+        break;
+    }
 
     return val;
 }
@@ -500,6 +656,16 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
+    HermesState *hermes = opaque;
+
+    switch ((addr & 0xFFFF) >> 12) {
+    case 0x0:
+        hermes_bar2_engine_write(hermes->bar2, addr & 0xFF, val, true);
+        break;
+    case 0x1:
+        hermes_bar2_engine_write(hermes->bar2, addr & 0xFF, val, false);
+        break;
+    }
 }
 
 static const MemoryRegionOps hermes_bar2_ops = {
@@ -612,6 +778,35 @@ static void init_bar2(HermesState *hermes)
         fprintf(stderr, "Failed to allocate memory for BAR 2\n");
         return;
     }
+
+    /* All of these match AWS F1 */
+    hermes->bar2->h2c.identifier = (0x1FC << 20) | (0x5);
+    /*
+     * FIXME: We probably want to enable control bits 18:9 (log and stop engine
+     * on read/write errors) and maybe 23:19 as well (log and stop on desc
+     * error)
+     *
+     * AWS F1 also enables bits 4:1, so register value is 0x00F83E1E
+     *
+     * hermes->bar2->h2c.control = 0x00F83E1E
+     */
+    hermes->bar2->h2c.alignment = 0x00010140;
+    /*
+     * FIXME: this should match h2c.control
+     * hermes->bar2->h2c.inter_enable_mask = 0x00F83E1E;
+     */
+
+    hermes->bar2->c2h.identifier = (0x1FC << 20) | (0x1 << 16) | (0x5);
+    /*
+     * FIXME: See comment about h2c.control
+     *
+     * hermes->bar2->c2h.control = 0x00F83E1E;
+     */
+    hermes->bar2->c2h.alignment = 0x00010140;
+    /*
+     * FIXME: See comment about h2.inter_enable_mask
+     * hermes->bar2->c2h.inter_enable_mask = 0x00F83E1E;
+     */
 }
 
 static void hermes_instance_init(Object *obj)
