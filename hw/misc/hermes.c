@@ -157,12 +157,23 @@ struct hermes_bar2_cfg_reg {
     uint32_t write_flush_timeout; /* 0x60 */
 };
 
+struct hermes_bar2_sgdma_reg {
+    uint32_t identifier;     /* 0x00 */
+    uint32_t desc_low_addr;  /* 0x80 */
+    uint32_t desc_high_addr; /* 0x84 */
+    uint32_t desc_num_adj;   /* 0x88 */
+    uint32_t desc_credits;   /* 0x8C */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
     struct hermes_bar2_engine_reg c2h;
     struct hermes_bar2_irq_reg irq;
     struct hermes_bar2_cfg_reg cfg;
+    struct hermes_bar2_sgdma_reg h2c_sgdma;
+    struct hermes_bar2_sgdma_reg c2h_sgdma;
+    struct hermes_bar2_sgdma_common sgdma_common;
 };
 
 typedef struct {
@@ -870,6 +881,78 @@ static uint64_t hermes_bar2_cfg_write(struct hermes_bar2 *bar2, hwaddr addr,
     return val;
 }
 
+static uint64_t hermes_bar2_sgdma_read(struct hermes_bar2 *bar2, hwaddr addr,
+                                       bool h2c)
+{
+    struct hermes_bar2_sgdma_reg *reg;
+    uint64_t val = ~0ULL;
+
+    if (h2c) {
+        reg = &bar2->h2c_sgdma;
+    } else {
+        reg = &bar2->c2h_sgdma;
+    }
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x80:
+        val = reg->desc_low_addr;
+        break;
+    case 0x84:
+        val = reg->desc_high_addr;
+        break;
+    case 0x88:
+        /* Only bits 5:0 are defined */
+        val = reg->desc_num_adj & 0x3F;
+        break;
+    case 0x8C:
+        /* Only bits 9:0 are defined */
+        val = reg->desc_credits & 0x3FF;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                        uint32_t val, bool h2c)
+{
+    struct hermes_bar2_sgdma_reg *reg;
+
+    if (h2c) {
+        reg = &bar2->h2c_sgdma;
+    } else {
+        reg = &bar2->c2h_sgdma;
+    }
+    switch (addr) {
+    case 0x80:
+        reg->desc_low_addr = val;
+        break;
+    case 0x84:
+        reg->desc_high_addr = val;
+        break;
+    case 0x88:
+        /* Only bits 5:0 are defined */
+        reg->desc_num_adj = val & 0x3F;
+        break;
+    case 0x8C:
+        /* Only bits 9:0 are defined */
+        reg->desc_credits = val & 0x3FF;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
@@ -887,6 +970,12 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 0x3:
         val = hermes_bar2_cfg_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x4:
+        val = hermes_bar2_sgdma_read(hermes->bar2, addr & 0xFF, true);
+        break;
+    case 0x5:
+        val = hermes_bar2_sgdma_read(hermes->bar2, addr & 0xFF, false);
         break;
     }
 
@@ -910,6 +999,12 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x3:
         val = hermes_bar2_cfg_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x4:
+        val = hermes_bar2_sgdma_write(hermes->bar2, addr & 0xFF, val, true);
+        break;
+    case 0x5:
+        val = hermes_bar2_sgdma_write(hermes->bar2, addr & 0xFF, val, false);
         break;
     }
 }
@@ -1066,6 +1161,9 @@ static void init_bar2(HermesState *hermes)
     hermes->bar2->cfg.pcie_ctrl = 1;
     hermes->bar2->cfg.axi_usr_mpl = (0x5 << 4) | (0x5);
     hermes->bar2->cfg.axi_usr_mrrs = (0x5 << 4) | (0x5);
+
+    hermes->bar2->h2c_sgdma.identifier = (0x1FC << 20) | (0x4 << 16) | (0x5);
+    hermes->bar2->c2h_sgdma.identifier = (0x1FC << 20) | (0x5 << 16) | (0x5);
 }
 
 static void hermes_instance_init(Object *obj)
