@@ -75,6 +75,7 @@
 #define DMA_DONE                  0x4
 
 #define HERMES_BAR0_SIZE          (32 * MiB)
+#define HERMES_BAR2_SIZE          (64 * KiB)
 #define HERMES_BAR4_SIZE          (16 * MiB)
 #define HERMES_RAM_SIZE           HERMES_BAR4_SIZE
 #define HERMES_MMIO_SIZE          (1 * MiB)
@@ -107,9 +108,14 @@ struct hermes_bar0 {
     MemoryRegion mem_reg;
 };
 
+struct hermes_bar2 {
+    MemoryRegion mem_reg;
+};
+
 typedef struct {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
+    struct hermes_bar2 *bar2;
     MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
     MemoryRegion hermes_mmio;
@@ -481,6 +487,32 @@ static const MemoryRegionOps hermes_bar0_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    uint64_t val = ~0ULL;
+
+    return val;
+}
+
+static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
+                unsigned size)
+{
+}
+
+static const MemoryRegionOps hermes_bar2_ops = {
+    .read = hermes_bar2_read,
+    .write = hermes_bar2_write,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
 /*
  * We purposely use a thread, so that users are forced to wait for the status
  * register.
@@ -533,6 +565,13 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                      &hermes->bar0->mem_reg);
 
+    memory_region_init_io(&hermes->bar2->mem_reg, OBJECT(hermes),
+                          &hermes_bar2_ops, hermes, "hermes-bar2",
+                          HERMES_BAR2_SIZE);
+    pci_register_bar(pdev, 2,
+            PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
+            &hermes->bar2->mem_reg);
+
     memory_region_init(&hermes->hermes_bar4, OBJECT(hermes), "hermes-bar4",
                        HERMES_BAR4_SIZE);
     memory_region_init_ram(&hermes->hermes_ram, OBJECT(hermes), "hermes-ram",
@@ -563,6 +602,15 @@ static void pci_hermes_uninit(PCIDevice *pdev)
     qemu_mutex_destroy(&hermes->thr_mutex);
 }
 
+static void init_bar2(HermesState *hermes)
+{
+    hermes->bar2 = calloc(1, sizeof(*hermes->bar2));
+    if (!hermes->bar2) {
+        fprintf(stderr, "Failed to allocate memory for BAR 2\n");
+        return;
+    }
+}
+
 static void hermes_instance_init(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
@@ -584,6 +632,7 @@ static void hermes_instance_init(Object *obj)
     } else {
         fprintf(stderr, "Failed to allocate memory for BAR 0\n");
     }
+    init_bar2(hermes);
     object_property_add_uint64_ptr(obj, "dma_mask",
                                    &hermes->dma_mask, OBJ_PROP_FLAG_READWRITE);
 }
