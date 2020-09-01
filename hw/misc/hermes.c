@@ -127,10 +127,32 @@ struct hermes_bar2_engine_reg {
     uint32_t pdc1;               /* 0xD0 */
 };
 
+struct hermes_bar2_irq_reg {
+    uint32_t identifier;              /* 0x00 */
+    uint32_t user_inter_enable_mask;  /* 0x04, 0x08 and 0x0C */
+    uint32_t chnl_inter_enable_mask;  /* 0x10, 0x14 and 0x18 */
+    uint32_t user_inter_request;      /* 0x40 */
+    uint32_t chnl_inter_request;      /* 0x44 */
+    uint32_t user_inter_pending;      /* 0x48 */
+    uint32_t chnl_inter_pending;      /* 0x4C */
+    uint32_t user_vct_num0;           /* 0x80 */
+    uint32_t user_vct_num1;           /* 0x84 */
+    uint32_t user_vct_num2;           /* 0x88 */
+    uint32_t user_vct_num3;           /* 0x8C */
+    uint32_t chnl_vct_num0;           /* 0xA0 */
+    uint32_t chnl_vct_num1;           /* 0xA4 */
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
     struct hermes_bar2_engine_reg c2h;
+    struct hermes_bar2_irq_reg irq;
+    struct hermes_bar2_cfg cfg;
+    struct hermes_bar2_sgdma h2c_sgdma;
+    struct hermes_bar2_sgdma c2h_sgdma;
+    struct hermes_bar2_sgdma_common sgdma_common;
+    struct hermes_bar2_msix_pba msix_pba;
 };
 
 typedef struct {
@@ -636,6 +658,121 @@ static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
     return val;
 }
 
+static uint64_t hermes_bar2_irq_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_irq_reg *reg = &bar2->irq;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+        val = reg->user_inter_enable_mask;
+        break;
+    case 0x10:
+        val = reg->chnl_inter_enable_mask;
+        break;
+    case 0x40:
+        val = reg->user_inter_request;
+        break;
+    case 0x44:
+        val = reg->chnl_inter_request;
+        break;
+    case 0x48:
+        val = reg->user_inter_pending;
+        break;
+    case 0x4C:
+        val = reg->chnl_inter_pending;
+        break;
+    case 0x80:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num0 & 0x1F1F1F1F;
+        break;
+    case 0x84:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num1 & 0x1F1F1F1F;
+        break;
+    case 0x88:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num2 & 0x1F1F1F1F;
+        break;
+    case 0x8C:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num3 & 0x1F1F1F1F;
+        break;
+    case 0xA0:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->chnl_vct_num0 & 0x1F1F1F1F;
+        break;
+    case 0xA4:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->chnl_vct_num1 & 0x1F1F1F1F;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_irq_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                      uint32_t val)
+{
+    struct hermes_bar2_irq_reg *reg = &bar2->irq;
+    switch (addr) {
+    case 0x04:
+        reg->user_inter_enable_mask = val;
+        break;
+    case 0x08:
+        reg->user_inter_enable_mask = W1S(reg->user_inter_enable_mask, val);
+        break;
+    case 0x0C:
+        reg->user_inter_enable_mask = W1C(reg->user_inter_enable_mask, val);
+        break;
+    case 0x10:
+        reg->chnl_inter_enable_mask = val;
+        break;
+    case 0x14:
+        reg->chnl_inter_enable_mask = W1S(reg->chnl_inter_enable_mask, val);
+        break;
+    case 0x18:
+        reg->chnl_inter_enable_mask = W1C(reg->chnl_inter_enable_mask, val);
+        break;
+    case 0x80:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num0 = val & 0x1F1F1F1F;
+        break;
+    case 0x84:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num1 = val & 0x1F1F1F1F;
+        break;
+    case 0x88:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num2 = val & 0x1F1F1F1F;
+        break;
+    case 0x8C:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num3 = val & 0x1F1F1F1F;
+        break;
+    case 0xA0:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->chnl_vct_num0 = val & 0x1F1F1F1F;
+        break;
+    case 0xA4:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->chnl_vct_num1 = val & 0x1F1F1F1F;
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
@@ -647,6 +784,9 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     case 0x1:
         val = hermes_bar2_engine_read(hermes->bar2, addr & 0xFF, false);
+        break;
+    case 0x2:
+        val = hermes_bar2_irq_read(hermes->bar2, addr & 0xFF);
         break;
     }
 
@@ -664,6 +804,9 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x1:
         hermes_bar2_engine_write(hermes->bar2, addr & 0xFF, val, false);
+        break;
+    case 0x2:
+        val = hermes_bar2_irq_write(hermes->bar2, addr & 0xFF, val);
         break;
     }
 }
@@ -807,6 +950,8 @@ static void init_bar2(HermesState *hermes)
      * FIXME: See comment about h2.inter_enable_mask
      * hermes->bar2->c2h.inter_enable_mask = 0x00F83E1E;
      */
+
+    hermes->bar2->irq.identifier = (0x1FC << 20) | (0x2 << 16) | (0x5);
 }
 
 static void hermes_instance_init(Object *obj)
