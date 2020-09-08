@@ -1,4 +1,4 @@
-#if defined(DEBUG)
+#if DEBUG
 
     // #warning compiling for this computer (not eBPF)
     #include <stdio.h>

@@ -39,15 +39,40 @@ int num_occurances(int *c)
         }
     }
 
-    return count;
+    return c[1];
 }
-
 
 /* For testing
  */
+#if DEBUG
 int main(int argc, char *argv[])
 {
+    FILE *fp;
+    long lSize;
+    char *buffer;
+
+    fp = fopen ( "patterntxt" , "r" );
+    if( !fp ) printf("Error opening textfile\n"),exit(1);
+
+    fseek( fp , 0L , SEEK_END);
+    lSize = ftell( fp );
+    rewind( fp );
+
+    buffer = calloc( 1, lSize+1 );
+    if( !buffer ) fclose(fp),fputs("memory alloc fails\n",stderr),exit(1);
+
+    if( 1!=fread( buffer , lSize, 1 , fp) )
+    fclose(fp),free(buffer),fputs("entire read fails\n",stderr),exit(1);
+
+    fclose(fp);
+    free(buffer);
+
+    for (int i = 0; i < lSize; i++) {
+        printf("%c", buffer[i]);
+    }
+
     int res = num_occurances(0);
     PRINT("Printing Result: %d\n", res);
     return res;
 }
+#endif
