@@ -1,6 +1,6 @@
 #if defined(DEBUG)
 
-    // #warning Assumed compiling for this computer (not eBPF)
+    // #warning compiling for this computer (not eBPF)
     #include <stdio.h>
     #include <stdlib.h>
     #include <stddef.h>
@@ -8,7 +8,7 @@
 
 #else
 
-    // #warning Assumed compiling for eBPF
+    // #warning compiling for eBPF
     #define PRINT(f_, ...) do { } while (0)
     #endif
 

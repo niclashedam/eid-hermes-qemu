@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
-clang-6.0 -O2 -target bpf -c patmatch.c -o patmatch.o
-echo "build complete"
-hexout=$(/home/tkeeling/ubpf/vm/test patmatch.o --mem /home/tkeeling/ubpf/vm/data64)
+make
+echo "Make complete. Running..."
+set +e
+./patmatch_linux.o
+hexout=$(/home/tkeeling/ubpf/vm/test patmatch_eBPF.o --mem /home/tkeeling/ubpf/vm/data64)
 printf "Return Value: $hexout (%d)\n" $((16#${hexout:2}))

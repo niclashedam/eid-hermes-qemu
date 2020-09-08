@@ -6,5 +6,6 @@ patmatch_eBPF: patmatch.c
 patmatch_linux: patmatch.c
 	gcc -o patmatch_linux.o patmatch.c -D DEBUG
 
-
-
+.PHONY : clean
+clean :
+	-rm *\.o

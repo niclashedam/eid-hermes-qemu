@@ -1,4 +1,4 @@
-#include "ebpf.h"
+#include "eBPF.h"
 
 /* uBPF will call the first function in a file (this one)
  *
@@ -9,29 +9,45 @@
  */
 int num_occurances(int *c)
 {
-    char source[] = "This is a regex test strig. tents r cool.te";
-    char pattern[] = "te";
+    char source[] = "apple This is an apple test strig. apples are cool.apple";
+    char pattern[] = "apple";
 
-    int num_occ = 0;
-    for (int i = 0; i < ARRAY_SIZE(source) - ARRAY_SIZE(pattern); i++) {
+    int count = 0;
+    for (int i = 0; i < ARRAY_SIZE(source) - ARRAY_SIZE(pattern) + 1; i++) {
+        // PRINT("%c", source[i]);
+
+        // for pattern to match we need each letter in series to match
+        // except the null character at the end
         for (int j = 0; j < ARRAY_SIZE(pattern)-1; j++) {
-            // return ARRAY_SIZE(pattern);
             if (source[i+j] != pattern[j])
                 break;
-            // if (j == ARRAY_SIZE(pattern) - 2)
-            //     return i+j;
-            // if (i == 2 && j == 1) {
-            //     return source[0];
+
+            if (j == ARRAY_SIZE(pattern)-2) {
+                count++;
+#if DEBUG
+                PRINT("MATCH FOUND @ pos: %d\n", i);
+                for (int k = 0; k < i+j+1; k++) {
+                    PRINT("%c", source[k]);
+                }
+                PRINT("\n");
+                for (int k = 0; k < i; k++) {
+                    PRINT(" ");
+                }
+                PRINT("^\n");
+#endif
+            }
         }
     }
 
-    return num_occ;
+    return count;
 }
 
+
+/* For testing
+ */
 int main(int argc, char *argv[])
 {
     int res = num_occurances(0);
     PRINT("Printing Result: %d\n", res);
     return res;
 }
-
