@@ -92,6 +92,9 @@
 #define HERMES_EHPSOFF   0x14
 #define HERMES_EHPSSZE   0x18
 
+#define W1S(old, new) ((old) | (new))
+#define W1C(old, new) ((old) & ~(new))
+
 struct hermes_bar0 {
     uint32_t ehver;
     uint32_t ehts;
