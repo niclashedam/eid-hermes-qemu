@@ -4,63 +4,64 @@
 
 union bpf
 {
-  unsigned long BPFcode;
-  struct bpf_insn code;
+  unsigned long code;
+  struct bpf_insn insn;
 };
 
-
-#define CHUNK 16
-
-FILE *hexdump_open(const char *path, const char *mode) {
-    FILE *fp;
-    if (!(fp = fopen(path, mode))) {
-        printf("error opening '%s'", path);
-        return 0;
-    }
-    return fp;
-}
+#define CHUNK 8
 
 int main(int argc, char* argv[])
 {
-    union bpf test;
-    test.code.code = 0x18;
-    test.code.dst_reg = 0x3;
-    test.code.src_reg = 0x5;
-    test.code.imm = 0xf4a123c8;
-    test.code.off = 0xfe09;
-    printf("opcode: 0x%lx\n", test.BPFcode);
-
     FILE *fp_in;
     FILE *fp_out;
     unsigned char buf[CHUNK];
     size_t nread;
-    int i, c, npos;
+    union bpf line;
+    unsigned int i;
+    unsigned int npos = 0;
 
 
-    /* open the input file */
-    fp_in = hexdump_open("patmatch_eBPF.o", "r");
+    if (!(fp_in = fopen("patmatch_eBPF.o", "r"))) {
+        printf("error opening file.\n");
+        return -1;
+    }
 
-    /* redirect output if an output file is defined */
     fp_out = stdout;
 
-    npos = 0;
-    /* display hex data CHUNK bytes at a time */
+    // Each fread loads one 64 bit operation. Endianness must be switched
     while ((nread = fread(buf, 1, sizeof buf, fp_in)) > 0) {
-        fprintf(fp_out, "%04x: ", npos);
-        npos += CHUNK;
+        // fprintf(fp_out, "%04x: ", npos);
+        // npos += CHUNK;
 
-        /* print hex values e.g. 3f 62 ec f0*/
+        // for (i = 0; i < CHUNK; i++) {
+        //     fprintf(fp_out, "%02x ", buf[i]);
+        // }
+        // fprintf(fp_out, "\n");
+
+        // Endian switch using long
+        line.code = 0;
         for (i = 0; i < CHUNK; i++) {
-            fprintf(fp_out, "%02x", buf[i]);
-            if (!((i+1) % 4)) fprintf(fp_out, " ");
+            line.code += (unsigned long)buf[i] << i*8;
         }
 
-        /* print ascii values e.g. ..A6..ó.j...D*/
-        for (i = 0; i < CHUNK; i++) {
-            c = buf[i];
-            fprintf(fp_out, "%c", (c >= 33 && c <= 255 ? c : '.'));
-        }
-        fprintf(fp_out, "\n");
+        // Endian switch using struct
+        // line.insn.code = buf[0];
+        // line.insn.src_reg = buf[1] >> 4;  // upper 4 bits
+        // line.insn.dst_reg = buf[1] & 0xf; // lower 4 bits
+        // line.insn.off = buf[2]
+        //              + (buf[3] << 8);
+        // line.insn.imm = buf[4]
+        //              + (buf[5] << 8)
+        //              + (buf[6] << 16)
+        //              + (buf[7] << 24);
+
+        // printf("    0x%016lx\n", line.code);
+        // printf("  code: 0x%02x\n", line.insn.code);
+        // printf("  src: 0x%01x\n", line.insn.src_reg);
+        // printf("  dst: 0x%01x\n", line.insn.dst_reg);
+        // printf("  off: 0x%04x\n", line.insn.off);
+        // printf("  Imm: 0x%08x\n", line.insn.imm);
+
     }
 
     fclose(fp_in);
