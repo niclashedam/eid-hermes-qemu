@@ -1155,6 +1155,9 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
     case 0x8:
         val = hermes_bar2_msix_pba_read(hermes->bar2, addr & 0xFFF);
         break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid read. Addr = 0x%lx\n", addr);
+        break;
     }
 
     return val;
@@ -1189,6 +1192,10 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         break;
     case 0x8:
         val = hermes_bar2_msix_pba_write(hermes->bar2, addr & 0xFFF, val);
+        break;
+    default:
+        fprintf(stderr, "[Hermes] Invalid write. Addr = 0x%lx Value = 0x%lx\n",
+                addr, val);
         break;
     }
 }
