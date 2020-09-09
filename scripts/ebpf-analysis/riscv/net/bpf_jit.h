@@ -11,7 +11,38 @@
 
 #include <linux/bpf.h>
 #include <linux/filter.h>
-#include <asm/cacheflush.h>
+#include <err.h>
+#include <string.h>
+#include <stdio.h>
+#include "stdbool.h"
+// #include <asm/cacheflush.h>
+
+typedef __u8 u8;
+typedef __u16 u16;
+typedef __u32 u32;
+
+typedef __s8 s8;
+
+// copied from cacheflush.h
+/*
+ * RISC-V doesn't have an instruction to flush parts of the instruction cache,
+ * so instead we just flush the whole thing.
+ */
+// #define flush_icache_range(start, end) flush_icache_all()
+// #define flush_icache_user_page(vma, pg, addr, len) \
+// 	flush_icache_mm(vma->vm_mm, 0)
+
+// #ifndef CONFIG_SMP
+
+// #define flush_icache_all() local_flush_icache_all()
+// #define flush_icache_mm(mm, local) flush_icache_all()
+
+// #else /* CONFIG_SMP */
+
+// void flush_icache_all(void);
+// void flush_icache_mm(struct mm_struct *mm, bool local);
+
+// #endif /* CONFIG_SMP */
 
 enum {
 	RV_REG_ZERO =	0,	/* The constant value 0 */
@@ -69,10 +100,10 @@ static inline void bpf_fill_ill_insns(void *area, unsigned int size)
 	memset(area, 0, size);
 }
 
-static inline void bpf_flush_icache(void *start, void *end)
-{
-	flush_icache_range((unsigned long)start, (unsigned long)end);
-}
+// static inline void bpf_flush_icache(void *start, void *end)
+// {
+// 	flush_icache_range((unsigned long)start, (unsigned long)end);
+// }
 
 static inline void emit(const u32 insn, struct rv_jit_context *ctx)
 {
@@ -125,7 +156,7 @@ static inline bool is_12b_int(long val)
 static inline int is_12b_check(int off, int insn)
 {
 	if (!is_12b_int(off)) {
-		pr_err("bpf-jit: insn=%d 12b < offset=%d not supported yet!\n",
+		printf("bpf-jit: insn=%d 12b < offset=%d not supported yet!\n",
 		       insn, (int)off);
 		return -1;
 	}
