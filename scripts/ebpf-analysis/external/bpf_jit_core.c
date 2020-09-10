@@ -7,7 +7,8 @@
  */
 
 #include <linux/bpf.h>
-#include <linux/filter.h>
+#include "filter.h"
+#include "new_bpf_jit.h"
 #include "bpf_jit.h"
 
 /* Number of iterations to try until offsets converge. */
@@ -61,7 +62,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	jit_data = prog->aux->jit_data;
 	if (!jit_data) {
-		jit_data = kzalloc(sizeof(*jit_data), GFP_KERNEL);
+		jit_data = calloc(1, sizeof(*jit_data));
 		if (!jit_data) {
 			prog = orig_prog;
 			goto out;
@@ -78,7 +79,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	}
 
 	ctx->prog = prog;
-	ctx->offset = kcalloc(prog->len, sizeof(int), GFP_KERNEL);
+	ctx->offset = calloc(prog->len, sizeof(int));
 	if (!ctx->offset) {
 		prog = orig_prog;
 		goto out_offset;
@@ -124,7 +125,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	}
 
 	if (i == NR_JIT_ITERATIONS) {
-		pr_err("bpf-jit: image did not converge in <%d passes!\n", i);
+		fprintf(stderr,"bpf-jit: image did not converge in <%d passes!\n", i);
 		bpf_jit_binary_free(jit_data->header);
 		prog = orig_prog;
 		goto out_offset;
@@ -149,12 +150,12 @@ skip_init_ctx:
 	prog->jited = 1;
 	prog->jited_len = image_size;
 
-	bpf_flush_icache(jit_data->header, ctx->insns + ctx->ninsns);
+	// bpf_flush_icache(jit_data->header, ctx->insns + ctx->ninsns);
 
 	if (!prog->is_func || extra_pass) {
 out_offset:
-		kfree(ctx->offset);
-		kfree(jit_data);
+		free(ctx->offset);
+		free(jit_data);
 		prog->aux->jit_data = NULL;
 	}
 out:

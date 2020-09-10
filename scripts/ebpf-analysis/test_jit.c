@@ -1,7 +1,7 @@
 #include <linux/bpf.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "riscv/net/bpf_jit.h"
+#include "external/new_bpf_jit.h"
 
 #define CHUNK 8
 
@@ -66,8 +66,7 @@ int main(int argc, char* argv[])
     int num_insn;
 
     struct rv_jit_context ctx;
-
-    bpf_jit_build_prologue(&ctx);
+    // bpf_jit_build_prologue(&ctx);
 
     if (!(fp_in = fopen("patmatch_eBPF.o", "r"))) {
         printf("error opening file.\n");
