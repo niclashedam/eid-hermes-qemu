@@ -184,6 +184,8 @@ struct hermes_bar2_msix_pba_reg {
     uint32_t pba;             /* 0xFE0 */
 };
 
+typedef struct HermesState HermesState;
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
@@ -194,9 +196,11 @@ struct hermes_bar2 {
     struct hermes_bar2_sgdma_reg c2h_sgdma;
     struct hermes_bar2_sgdma_common_reg sgdma_common;
     struct hermes_bar2_msix_pba_reg msix_pba;
+
+    HermesState *parent;
 };
 
-typedef struct {
+struct HermesState {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
     struct hermes_bar2 *bar2;
@@ -223,7 +227,7 @@ typedef struct {
     } cmd;
     char dma_buf[DMA_SIZE];
     uint64_t dma_mask;
-} HermesState;
+};
 
 /* Function hexDump was copied from https://stackoverflow.com/a/7776146 */
 static void hexDump (const char *desc, void *addr, int len)
@@ -1363,6 +1367,8 @@ static void init_bar2(HermesState *hermes)
     hermes->bar2->sgdma_common.identifier = (0x1FC << 20) | (0x6 << 16) | (0x5);
     hermes->bar2->msix_pba.vec0_ctrl = 0xFFFFFFFF;
     hermes->bar2->msix_pba.vec31_ctrl = 0xFFFFFFFF;
+
+    hermes->bar2->parent = hermes;
 }
 
 static void hermes_instance_init(Object *obj)
