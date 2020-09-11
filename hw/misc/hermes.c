@@ -593,6 +593,78 @@ static const MemoryRegionOps hermes_bar0_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static void do_dma(struct hermes_bar2 *bar2, bool h2c)
+{
+    struct hermes_bar2_engine_reg *engine_reg;
+    struct hermes_bar2_sgdma_reg *sgdma_reg;
+    struct hermes_bar2_irq_reg *irq = &bar2->irq;
+    HermesState *hermes = bar2->parent;
+    struct hermes_dma_desc desc;
+    hwaddr desc_addr;
+    hwaddr src_addr, dst_off;
+    void *bar4_base = memory_region_get_ram_ptr(&hermes->hermes_ram);
+    unsigned irq_vector;
+
+    if (h2c) {
+        sgdma_reg = &bar2->h2c_sgdma;
+        engine_reg = &bar2->h2c;
+        irq_vector = 0;
+    } else {
+        sgdma_reg = &bar2->c2h_sgdma;
+        engine_reg = &bar2->c2h;
+        irq_vector = 1;
+    }
+
+    /* Reset number of completed descriptors */
+    engine_reg->cmp_desc_count = 0;
+
+    /* Set engine as busy */
+    atomic_or(&engine_reg->status, 0x1);
+
+    /* Read DMA descriptor */
+    desc_addr = ((uint64_t) sgdma_reg->desc_high_addr) << 32 |
+                sgdma_reg->desc_low_addr;
+    pci_dma_read(&hermes->pdev, desc_addr, &desc, sizeof(desc));
+
+    trace_hermes_dma_desc(desc.ctrl, desc.len, desc.src_addr_lo,
+                          desc.src_addr_hi, desc.dst_addr_lo, desc.dst_addr_hi,
+                          desc.nxt_addr_lo, desc.nxt_addr_hi);
+
+    /* DMA in */
+    if (h2c) {
+        src_addr = ((uint64_t) desc.src_addr_hi << 32) | desc.src_addr_lo;
+        dst_off = ((uint64_t) desc.dst_addr_hi << 32) | desc.dst_addr_lo;
+        trace_hermes_dma("H2C", src_addr, dst_off);
+        pci_dma_read(&bar2->parent->pdev, src_addr, bar4_base + dst_off,
+                     desc.len);
+    } else {
+        src_addr = ((uint64_t) desc.src_addr_hi << 32) | desc.src_addr_lo;
+        dst_off = ((uint64_t) desc.dst_addr_hi << 32) | desc.dst_addr_lo;
+        trace_hermes_dma("C2H", src_addr, dst_off);
+        pci_dma_write(&bar2->parent->pdev, dst_off, bar4_base + src_addr,
+                     desc.len);
+    }
+
+    /* Set number of completed descriptors */
+    engine_reg->cmp_desc_count = 1;
+
+    /* Set engine as not busy */
+    atomic_and(&engine_reg->status, ~1);
+
+    if (irq->chnl_inter_enable_mask & (irq_vector + 1)) {
+        /* Set interrupt source */
+        irq->chnl_inter_request =  irq->chnl_inter_enable_mask &
+                                   (irq_vector + 1);
+
+        /*
+         * Send interrupt. Since we currently have only one channel for H2C and
+         * one for C2H, we have that IRQ 0 is H2C and IRQ 1 is C2H
+         */
+        trace_hermes_msix_notify(irq_vector);
+        msix_notify(PCI_DEVICE(hermes), irq_vector);
+    }
+}
+
 static uint64_t hermes_bar2_engine_read(struct hermes_bar2 *bar2, hwaddr addr,
                                         bool h2c)
 {
@@ -677,6 +749,9 @@ static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
     switch (addr) {
     case 0x04:
         reg->control = 0x0FFFFE7F & val;
+        if (reg->control & 0x1) {
+            do_dma(bar2, h2c);
+        }
         break;
     case 0x08:
         /* W1S */
