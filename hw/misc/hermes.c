@@ -186,6 +186,17 @@ struct hermes_bar2_msix_pba_reg {
 
 typedef struct HermesState HermesState;
 
+struct hermes_dma_desc {
+    uint32_t ctrl;
+    uint32_t len;
+    uint32_t src_addr_lo;
+    uint32_t src_addr_hi;
+    uint32_t dst_addr_lo;
+    uint32_t dst_addr_hi;
+    uint32_t nxt_addr_lo;
+    uint32_t nxt_addr_hi;
+};
+
 struct hermes_bar2 {
     MemoryRegion mem_reg;
     struct hermes_bar2_engine_reg h2c;
