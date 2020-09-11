@@ -38,6 +38,7 @@
 #include "qapi/visitor.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "trace.h"
 #include <ubpf.h>
 #include <elf.h>
 
@@ -1160,6 +1161,8 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         break;
     }
 
+    trace_hermes_bar2_read(size, addr, val);
+
     return val;
 }
 
@@ -1167,6 +1170,8 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
     HermesState *hermes = opaque;
+
+    trace_hermes_bar2_write(size, addr, val);
 
     switch ((addr & 0xFFFF) >> 12) {
     case 0x0:
