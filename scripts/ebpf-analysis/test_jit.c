@@ -103,6 +103,7 @@ int main(int argc, char* argv[])
     union bpf_attr bpf_attr_load;
     char *buf;
     int buflen = 1024 * 1024;
+    char *license = "GPL";
 
     num_insn = load_insns("simple.o", &insns);
     if (num_insn < 1) {
@@ -125,7 +126,7 @@ int main(int argc, char* argv[])
         .prog_type = BPF_PROG_TYPE_UNSPEC,
         .insn_cnt = num_insn,
         .insns = ptr_to_u64(insns),
-        .license = 0,
+        .license = ptr_to_u64(license),
         .log_level = 4,
         .log_size = buflen,
         .log_buf = ptr_to_u64(buf),

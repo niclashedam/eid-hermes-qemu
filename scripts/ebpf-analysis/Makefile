@@ -1,6 +1,7 @@
 test_jit: test_jit.c
-	gcc test_jit.c external/bpf_jit_core.c external/core.c external/bpf_jit_comp32.c \
-	-o out -Iexternal #-I/home/tkeeling/linux/tools/include/uapi -I/home/tkeeling/linux/include
+	gcc test_jit.c -o out -Wall
+	# gcc test_jit.c external/bpf_jit_core.c external/core.c external/bpf_jit_comp32.c \
+	# -o out -Iexternal #-I/home/tkeeling/linux/tools/include/uapi -I/home/tkeeling/linux/include
 
 all : patmatch_eBPF patmatch_linux
 
