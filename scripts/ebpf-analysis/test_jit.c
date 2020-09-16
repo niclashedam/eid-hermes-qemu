@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <errno.h>
+#include <string.h>
 
 #define CHUNK 8 // single eBPF instruction size (bytes)
 #define DEBUG_LEN 15
@@ -23,12 +25,14 @@ typedef union bpf
   struct bpf_insn insn;
 } bpf_u;
 
-void get_next_insn(char buf[CHUNK], union bpf *line) {
+void get_next_insn(unsigned char buf[CHUNK], bpf_u *line) {
         // Endian switch using long
         line->code = 0;
-        for (int i = 0; i < CHUNK; i++) {
-            line->code += (unsigned long)buf[i] << i*8;
+        for (int i = 0; i < 8; i++) {
+            line->code += (unsigned long)(buf[i] & 0xff) << i*8;
         }
+
+        // printf("next: 0x%016lx\n", line->code);
 
         // Endian switch using struct
         // line.insn.code = buf[0];
@@ -47,7 +51,7 @@ int filesize(FILE *fp) {
 
     fseek(fp, 0L, SEEK_END);
     filesize = ftell(fp);
-    printf("filsize: %d\n", filesize);
+    printf("filesize: %d bytes\n", filesize);
     fseek(fp, 0L, SEEK_SET);
     return filesize;
 }
@@ -76,7 +80,7 @@ int load_insns(char* filename, bpf_u **insns_p) {
 
     /* Each fread loads one 64 bit operation. Endianness must be switched
      * so that the instruciton can be mapped to a bpf_insn */
-    while (fread(buf, 1, sizeof buf, fp_in)) {
+    while (fread(buf, 1, CHUNK, fp_in)) {
         if (!(i < num_insn)) {
             fprintf(stderr, "Allocation error, incorrect filesize\n");
             return -1;
@@ -84,6 +88,8 @@ int load_insns(char* filename, bpf_u **insns_p) {
         get_next_insn(buf, &insns[i]);
         i++;
     }
+
+    printf("size: %ld\n", sizeof(buf));
 
     fclose(fp_in);
     *insns_p = insns;
@@ -98,14 +104,16 @@ int main(int argc, char* argv[])
     char *buf;
     int buflen = 1024 * 1024;
 
-    num_insn = load_insns("patmatch_eBPF.o", &insns);
+    num_insn = load_insns("simple.o", &insns);
     if (num_insn < 1) {
         fprintf(stderr, "Error loading instructions.\n");
         return -1;
     }
-    // for (int j = 0; j < num_insn; j++) {
-    //     printf("0x%016lx\n", insns[j].code);
-    // }
+    for (int j = 0; j < num_insn; j++) {
+        printf("insn %3d: 0x%016lx\n", j, insns[j].code);
+    }
+
+    // printf("line 8: 0x%016lx\n", (insns+8)->code); /* beginning for simple.o */
 
     buf = (char*)malloc(buflen*sizeof(char));
     if (buf==NULL) {
@@ -118,31 +126,34 @@ int main(int argc, char* argv[])
         .insn_cnt = num_insn,
         .insns = ptr_to_u64(insns),
         .license = 0,
-        .log_level = 3,
-        .log_size = buflen, //??
+        .log_level = 4,
+        .log_size = buflen,
         .log_buf = ptr_to_u64(buf),
-        .kern_version = 0,
+        .kern_version = 4,
         .prog_flags = 0,
-        .prog_name = "Search",
+        .prog_name = "",
         .prog_ifindex = 0
     };
 
     int bpf_p = bpf(BPF_PROG_LOAD, &bpf_attr_load, sizeof(bpf_attr_load));
+
+    if (bpf_p < 0) {
+        printf("bpf error %d: %s (%d)\n", bpf_p, strerror(errno), errno);
+    }
 
     printf("Printing buffer:\n");
     for (int j = 0; j < buflen; j++) {
         printf("%c", buf[j]);
     }
 
-    int buflen2 = 512;
-    char *buf2 = (char*)malloc(buflen2*sizeof(char));
+    // int buflen2 = 512;
+    // char *buf2 = (char*)malloc(buflen2*sizeof(char));
 
     // printf("Printing file descriptor:\n");
     // FILE* fp = fdopen(bpf_p, "r");
     // while (fread(buf, 1, sizeof buf2, fp)) {
     //     printf("%s", buf2);
     // }
-
 
     free(insns);
     free(buf);
