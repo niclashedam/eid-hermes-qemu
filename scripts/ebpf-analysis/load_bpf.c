@@ -39,16 +39,6 @@ void get_next_insn(unsigned char buf[CHUNK], bpf_u *line) {
         for (int i = 0; i < 8; i++) {
             line->code += (unsigned long)(buf[i] & 0xff) << i*8;
         }
-        // Endian switch using struct
-        // line.insn.code = buf[0];
-        // line.insn.src_reg = buf[1] >> 4;  // upper 4 bits
-        // line.insn.dst_reg = buf[1] & 0xf; // lower 4 bits
-        // line.insn.off = buf[2]
-        //              + (buf[3] << 8);
-        // line.insn.imm = buf[4]
-        //              + (buf[5] << 8)
-        //              + (buf[6] << 16)
-        //              + (buf[7] << 24);
 }
 
 int filesize(FILE *fp) {
@@ -108,7 +98,6 @@ int main(int argc, char* argv[])
     int buflen = 1024 * 1024;
     char *license = "GPL";
     int verbose = 0;
-    // char *name;
 
     if (argc < 2) {
         printf("Usage: ./test_jit eBPF_extracted_text.o [--verbose]\n");
@@ -116,9 +105,6 @@ int main(int argc, char* argv[])
     } else if (argc == 3) {
         verbose = 1;
     }
-
-    // name = (char*)malloc(BPF_OBJ_NAME_LEN);
-    // strncpy(name, argv[1], BPF_OBJ_NAME_LEN-1); // save null character
 
     signal(SIGINT, sig_handler);
     signal(SIGTERM, sig_handler);
@@ -129,15 +115,9 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    if (verbose) {
-        for (int j = 0; j < num_insn; j++) {
-            printf("insn %3d: 0x%016lx\n", j, insns[j].code);
-        }
-    }
-
     buf = (unsigned char*)malloc(buflen*sizeof(char));
     if (buf==NULL) {
-        fprintf(stderr, "error allocating memory.\n");
+        fprintf(stderr, "Error allocating memory.\n");
         return -1;
     }
 
@@ -152,7 +132,8 @@ int main(int argc, char* argv[])
         .kern_version = 5,
     };
 
-    strncpy(bpf_attr_load.prog_name, argv[1], BPF_OBJ_NAME_LEN-1); //save null character.
+    /* don't overwrite null character. */
+    strncpy(bpf_attr_load.prog_name, argv[1], BPF_OBJ_NAME_LEN-1);
 
     int bpf_p = bpf(BPF_PROG_LOAD, &bpf_attr_load, sizeof(bpf_attr_load));
 
@@ -166,20 +147,23 @@ int main(int argc, char* argv[])
         return -1;
     }
 
-    printf("Printing buffer:\n");
-    for (int j = 0; j < buflen; j++) {
-        printf("%c", buf[j]);
+    if (verbose) {
+        printf("Printing buffer:\n");
+        for (int j = 0; j < buflen; j++) {
+            printf("%c", buf[j]);
+        }
+        printf("\n");
     }
 
-    /* Keeps eBPF program loaded only while this program is running.
+    /* We want eBPF program loaded only while this program is running.
      * one MUST close the eBPF file descriptor else the BPF will
      * persist after this program has terminated.
      */
-    printf("\nBPF program loaded with fd %d. Press ^C to exit.\n", bpf_p);
+    printf("BPF program loaded!\n");
     while (keep_running)
         sleep(1000);
 
-    printf("closing file descriptor..\n");
+    printf("Closing file descriptor...\n");
     close(bpf_p);
     free(insns);
     free(buf);

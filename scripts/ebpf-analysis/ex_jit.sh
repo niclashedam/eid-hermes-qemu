@@ -29,3 +29,5 @@ if [ -z $BPFTOOL ]; then
 else
     $BPFTOOL prog dump jited name $tmpfile
 fi
+
+mv dump ${1}_JIT

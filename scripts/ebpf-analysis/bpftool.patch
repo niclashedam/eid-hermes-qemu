@@ -1,0 +1,13 @@
+diff --git a/tools/bpf/bpftool/prog.c b/tools/bpf/bpftool/prog.c
+index b352ab041160..0d3057f85889 100644
+--- a/tools/bpf/bpftool/prog.c
++++ b/tools/bpf/bpftool/prog.c
+@@ -577,6 +577,8 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
+ 			jsonw_null(json_wtr);
+ 	} else if (mode == DUMP_JITED) {
+ 		const char *name = NULL;
++		int f = open("dump", O_WRONLY | O_CREAT | O_TRUNC, 0666);
++		write(f, buf, member_len);
+ 
+ 		if (info->ifindex) {
+ 			name = ifindex_to_bfd_params(info->ifindex,
