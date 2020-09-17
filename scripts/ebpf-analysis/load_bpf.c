@@ -5,9 +5,17 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include <string.h>
+#include <signal.h>
 
-#define CHUNK 8 // single eBPF instruction size (bytes)
-#define DEBUG_LEN 15
+#define CHUNK 8 // single eBPF instruction size in bytes
+
+static volatile sig_atomic_t keep_running = 1;
+
+static void sig_handler(int _)
+{
+    (void)_;
+    keep_running = 0;
+}
 
 int bpf(enum bpf_cmd cmd, union bpf_attr *attr, unsigned int size)
 {
@@ -31,9 +39,6 @@ void get_next_insn(unsigned char buf[CHUNK], bpf_u *line) {
         for (int i = 0; i < 8; i++) {
             line->code += (unsigned long)(buf[i] & 0xff) << i*8;
         }
-
-        // printf("next: 0x%016lx\n", line->code);
-
         // Endian switch using struct
         // line.insn.code = buf[0];
         // line.insn.src_reg = buf[1] >> 4;  // upper 4 bits
@@ -67,7 +72,7 @@ int load_insns(char* filename, bpf_u **insns_p) {
     bpf_u *insns; /* pointer to bpf_u array */
 
     if (!(fp_in = fopen(filename, "r"))) {
-        fprintf(stderr, "error opening file.\n");
+        fprintf(stderr, "Error opening file for read.\n");
         return -1;
     }
 
@@ -81,8 +86,8 @@ int load_insns(char* filename, bpf_u **insns_p) {
     /* Each fread loads one 64 bit operation. Endianness must be switched
      * so that the instruciton can be mapped to a bpf_insn */
     while (fread(buf, 1, CHUNK, fp_in)) {
-        if (!(i < num_insn)) {
-            fprintf(stderr, "Allocation error, incorrect filesize\n");
+        if (i >= num_insn) {
+            fprintf(stderr, "Incorrect file format.\n"); // avoid segfault
             return -1;
         }
         get_next_insn(buf, &insns[i]);
@@ -102,18 +107,33 @@ int main(int argc, char* argv[])
     unsigned char *buf;
     int buflen = 1024 * 1024;
     char *license = "GPL";
+    int verbose = 0;
+    // char *name;
 
-    num_insn = load_insns("pattxt.o", &insns);
+    if (argc < 2) {
+        printf("Usage: ./test_jit eBPF_extracted_text.o [--verbose]\n");
+        return -1;
+    } else if (argc == 3) {
+        verbose = 1;
+    }
+
+    // name = (char*)malloc(BPF_OBJ_NAME_LEN);
+    // strncpy(name, argv[1], BPF_OBJ_NAME_LEN-1); // save null character
+
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    num_insn = load_insns(argv[1], &insns);
     if (num_insn < 1) {
         fprintf(stderr, "Error loading instructions.\n");
         return -1;
     }
 
-    for (int j = 0; j < num_insn; j++) {
-        printf("insn %3d: 0x%016lx\n", j, insns[j].code);
+    if (verbose) {
+        for (int j = 0; j < num_insn; j++) {
+            printf("insn %3d: 0x%016lx\n", j, insns[j].code);
+        }
     }
-
-    // printf("line 8: 0x%016lx\n", (insns+8)->code); /* beginning for simple.o */
 
     buf = (unsigned char*)malloc(buflen*sizeof(char));
     if (buf==NULL) {
@@ -132,10 +152,17 @@ int main(int argc, char* argv[])
         .kern_version = 5,
     };
 
+    strncpy(bpf_attr_load.prog_name, argv[1], BPF_OBJ_NAME_LEN-1); //save null character.
+
     int bpf_p = bpf(BPF_PROG_LOAD, &bpf_attr_load, sizeof(bpf_attr_load));
 
     if (bpf_p < 0) {
-        printf("bpf error %d: %s (%d)\n", bpf_p, strerror(errno), errno);
+        printf("BPF error %d: %s (%d)\n", bpf_p, strerror(errno), errno);
+        if (errno == 1) {
+            printf("Please try again with sudo permissions.\n");
+        } else if (errno == 22) {
+            printf("Have you extracted the program section?.\n");
+        }
         return -1;
     }
 
@@ -144,24 +171,17 @@ int main(int argc, char* argv[])
         printf("%c", buf[j]);
     }
 
-    printf("\nBPF program loaded with fd %d. Press ^C to exit\n", bpf_p);
-    while (1) sleep(100000);
+    /* Keeps eBPF program loaded only while this program is running.
+     * one MUST close the eBPF file descriptor else the BPF will
+     * persist after this program has terminated.
+     */
+    printf("\nBPF program loaded with fd %d. Press ^C to exit.\n", bpf_p);
+    while (keep_running)
+        sleep(1000);
 
+    printf("closing file descriptor..\n");
+    close(bpf_p);
     free(insns);
     free(buf);
-    return 0;
+    return EXIT_SUCCESS;
 }
-
-// nonsense
-        // printf("%d: ", npos);
-        // npos += CHUNK;
-        // for (i = 0; i < CHUNK; i++) {
-        //     fprintf(fp_out, "%02x ", buf[i]);
-        // }
-        // fprintf(fp_out, "\n");
-
-        // printf("  code: 0x%02x\n", line.insn.code);
-        // printf("  src: 0x%01x\n", line.insn.src_reg);
-        // printf("  dst: 0x%01x\n", line.insn.dst_reg);
-        // printf("  off: 0x%04x\n", line.insn.off);
-        // printf("  Imm: 0x%08x\n", line.insn.imm);
