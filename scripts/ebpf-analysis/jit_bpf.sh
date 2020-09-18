@@ -36,6 +36,13 @@ echo "Load eBPF program:"
 
 sleep 1
 
+if [ -z $BPF_TOOL ]; then
+    if [ -n `ls | grep ^bpftool$` ]; then
+        # found bpftool in this directory
+        BPF_TOOL=./bpftool
+    fi
+fi
+
 # get JIT output
 if [ -z $BPF_TOOL ]; then
     echo

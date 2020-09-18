@@ -132,7 +132,7 @@ int main(int argc, char* argv[])
         .kern_version = 5,
     };
 
-    /* don't overwrite null character. */
+    /* don't overwrite end character. */
     strncpy(bpf_attr_load.prog_name, argv[1], BPF_OBJ_NAME_LEN-1);
 
     int bpf_p = bpf(BPF_PROG_LOAD, &bpf_attr_load, sizeof(bpf_attr_load));
