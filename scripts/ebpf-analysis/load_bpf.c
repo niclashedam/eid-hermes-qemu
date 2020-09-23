@@ -29,7 +29,7 @@ static inline __u64 ptr_to_u64(const void *ptr)
 
 typedef union bpf
 {
-  unsigned long code;
+  __u64 code;
   struct bpf_insn insn;
 } bpf_u;
 
@@ -37,7 +37,7 @@ void get_next_insn(unsigned char buf[CHUNK], bpf_u *line) {
         // Endian switch using long
         line->code = 0;
         for (int i = 0; i < 8; i++) {
-            line->code += (unsigned long)(buf[i] & 0xff) << i*8;
+            line->code += (__u64)(buf[i] & 0xff) << i*8;
         }
 }
 
@@ -131,6 +131,14 @@ int main(int argc, char* argv[])
         .log_buf = ptr_to_u64(buf),
         .kern_version = 5,
     };
+
+    if (verbose) {
+        printf("Printing BPF instructions:\n");
+        for (int j = 0; j < num_insn; j++) {
+            printf("0x%016llx\n", insns[j].code);
+        }
+        printf("\n");
+    }
 
     /* don't overwrite end character. */
     strncpy(bpf_attr_load.prog_name, argv[1], BPF_OBJ_NAME_LEN-1);

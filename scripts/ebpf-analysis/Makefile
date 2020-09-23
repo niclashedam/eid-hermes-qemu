@@ -2,6 +2,7 @@ all : patmatch_eBPF patmatch_linux simple load_bpf
 
 load_bpf: load_bpf.c
 	gcc load_bpf.c -o load_bpf -Wall
+	riscv32-unknown-linux-gnu-gcc load_bpf.c -o load_bpf_riscv.o
 
 simple: simple.c
 	clang-6.0 -O2 -target bpf -Wall -c simple.c -o simple.o
@@ -14,4 +15,4 @@ patmatch_linux: patmatch.c
 
 .PHONY : clean
 clean:
-	rm -f *\.o load_bpf
+	rm -f *\.o load_bpf *_dump
