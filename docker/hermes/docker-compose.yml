@@ -1,0 +1,17 @@
+version: "3"
+services:
+
+  hermes-vm:
+    build:
+      dockerfile: ./Dockerfile
+      context: ./
+      args:
+        HERMES_QEMU_REF: martin/hermes_v3
+    user: root
+    network_mode: host
+    privileged: true
+    ports:
+      - "2222:22/tcp"
+    volumes:
+      - ./images:/opt/hermes/images
+      - ./kernels:/opt/hermes/kernels
