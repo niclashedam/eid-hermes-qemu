@@ -1,0 +1,6 @@
+/sys/devices/pci0000:00/0000:00:1d.0/resource1 opened.
+Target offset is 0x0, page size is 4096
+mmap(0, 40000, 0x3, 0x1, 3, 0x0)
+PCI Memory mapped to address 0x7f13fbf4b000.
+0x0000: 0xFFFFFFFF
+...

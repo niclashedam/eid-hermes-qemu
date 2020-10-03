@@ -1,0 +1,54 @@
+[  757.709599] xdma:char_sgdma_read_write: file 0xffff88e73d234300, priv 0xffff88e7415463c8, buf 0x0000000000c4f010,256, pos 4096, W 1, 0-H2C0-MM.
+[  757.721666] xdma:xdma_request_cb_dump: request 0xffff88e743bf40c0, total 256, ep 0x1000, sw_desc 1, sgt 0xffff88e719f0fe60.
+[  757.728910] xdma:sgt_dump: sgt 0xffff88e719f0fe60, sgl 0xffff88e73f321ee0, nents 1/1.
+[  757.733995] xdma:sgt_dump: 0, 0xffff88e73f321ee0, pg 0xffffedfc7974e3c0,16+256, dma 0x1e5d38f010,256.
+[  757.740000] xdma:xdma_request_cb_dump: 0/1, 0x1e5d38f010, 256.
+[  757.743848] xdma:xdma_xfer_submit: 0-H2C0-MM, len 256 sg cnt 1.
+[  757.747642] xdma:transfer_init: transfer->desc_bus = 0x34f50000.
+[  757.751761] xdma:transfer_build: sw desc 0/1: 0x1e5d38f010, 0x100, ep 0x1000.
+[  757.756087] xdma:transfer_init: transfer 0xffff88e743bf40d8 has 1 descriptors
+[  757.760363] xdma:xdma_xfer_submit: xfer, 256, ep 0x1100, done 0, sg 1/1.
+[  757.764656] xdma:transfer_dump: xfer 0xffff88e743bf40d8, state 0x0, f 0x1, dir 1, len 256, last 1.
+[  757.769983] xdma:transfer_dump: transfer 0xffff88e743bf40d8, desc 1, bus 0x34f50000, adj 1.
+[  757.775101] xdma:dump_desc: 0xffff88c8f4f50000/0x00: 0xad4b0013 0xad4b0013 magic|extra_adjacent|control
+[  757.782102] xdma:dump_desc: 0xffff88c8f4f50004/0x04: 0x00000100 0x00000100 bytes
+[  757.788244] xdma:dump_desc: 0xffff88c8f4f50008/0x08: 0x5d38f010 0x5d38f010 src_addr_lo
+[  757.794586] xdma:dump_desc: 0xffff88c8f4f5000c/0x0c: 0x0000001e 0x0000001e src_addr_hi
+[  757.800859] xdma:dump_desc: 0xffff88c8f4f50010/0x00: 0x00001000 0x00001000 dst_addr_lo
+[  757.807491] xdma:dump_desc: 0xffff88c8f4f50014/0x04: 0x00000000 0x00000000 dst_addr_hi
+[  757.813999] xdma:dump_desc: 0xffff88c8f4f50018/0x08: 0x00000000 0x00000000 next_addr
+[  757.821394] xdma:dump_desc: 0xffff88c8f4f5001c/0x0c: 0x00000000 0x00000000 next_addr_pad
+[  757.829573] xdma:dump_desc:
+[  757.832706] xdma:transfer_queue: transfer_queue(transfer=0xffff88e743bf40d8).
+[  757.840031] xdma:transfer_queue: transfer_queue(): starting 0-H2C0-MM engine.
+[  757.847097] xdma:engine_start: engine_start(0-H2C0-MM): transfer=0xffff88e743bf40d8.
+[  757.853483] xdma:engine_start: iowrite32(0x34f50000 to 0xffff94e90cf64080) (first_desc_lo)
+[  757.860765] xdma:__write_register: engine_start: w reg 0xc20181deb20(0xffff94e90cf64080), 0x34f50000.
+[  757.868730] xdma:engine_start: iowrite32(0x00000000 to 0xffff94e90cf64084) (first_desc_hi)
+[  757.875774] xdma:__write_register: engine_start: w reg 0xc20181deb24(0xffff94e90cf64084), 0x0.
+[  757.883000] xdma:engine_start: iowrite32(0x00000000 to 0xffff94e90cf64088) (first_desc_adjacent)
+[  757.890365] xdma:__write_register: engine_start: w reg 0xc20181deb28(0xffff94e90cf64088), 0x0.
+[  757.897902] xdma:engine_start: ioread32(0xffff94e90cf60040) (dummy read flushes writes).
+[  757.905160] xdma:engine_start_mode_config: iowrite32(0x00f83e1f to 0xffff94e90cf60004) (control)
+[  757.912775] xdma:__write_register: engine_start_mode_config: w reg 0xc20181daaac(0xffff94e90cf60004), 0xf83e1f.
+[  757.921554] xdma:engine_start_mode_config: ioread32(0xffff94e90cf60040) = 0x00000001 (dummy read flushes writes).
+[  757.930457] xdma:engine_start: 0-H2C0-MM engine 0xffff88c8f4d85538 now running
+[  757.936772] xdma:transfer_queue: transfer=0xffff88e743bf40d8 started 0-H2C0-MM engine with transfer 0xffff88e743bf40d8.
+[  757.945607] xdma:transfer_queue: engine->running = 1
+[  757.950050] xdma:xdma_channel_irq: (irq=109) <<<< INTERRUPT service ROUTINE
+[  757.956165] xdma:__write_register: xdma_channel_irq: w reg 0xc20181dab40(0xffff94e90cf60098), 0xf83e1e.
+[  757.964273] xdma:engine_service_work: engine_service() for 0-H2C0-MM engine ffff88c8f4d85538
+[  757.971540] xdma:engine_service_shutdown: engine just went idle, resetting RUN_STOP.
+[  757.977999] xdma:xdma_engine_stop: xdma_engine_stop(engine=ffff88c8f4d85538)
+[  757.983927] xdma:xdma_engine_stop: Stopping SG DMA 0-H2C0-MM engine; writing 0x00f83e1e to 0xffff94e90cf60004.
+[  757.992114] xdma:__write_register: xdma_engine_stop: w reg 0xc20181daaac(0xffff94e90cf60004), 0xf83e1e.
+[  757.999816] xdma:xdma_engine_stop: xdma_engine_stop(0-H2C0-MM) done
+[  758.005206] xdma:engine_service: desc_count = 1
+[  758.009251] xdma:engine_service: head of queue transfer 0xffff88e743bf40d8 has 1 descriptors
+[  758.016300] xdma:engine_service: Engine completed 1 desc, 1 not yet dequeued
+[  758.022216] xdma:engine_service_final_transfer: engine 0-H2C0-MM completed transfer
+[  758.028754] xdma:engine_service_final_transfer: Completed transfer ID = 0xffff88e743bf40d8
+[  758.035741] xdma:engine_service_final_transfer: *pdesc_completed=1, transfer->desc_num=1
+[  758.041959] xdma:engine_service_resume: no pending transfers, 0-H2C0-MM engine stays idle.
+[  758.049656] xdma:__write_register: engine_service_work: w reg 0xc20181dab3c(0xffff94e90cf60094), 0xf83e1e.
+[  758.057752] xdma:xdma_xfer_submit: transfer ffff88e743bf40d8, 256, ep 0x1000 compl, +0.
