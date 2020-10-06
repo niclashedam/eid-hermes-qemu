@@ -33,7 +33,6 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
-#include "hw/pci/msi.h"
 #include "qemu/main-loop.h" /* iothread mutex */
 #include "qapi/visitor.h"
 #include "qapi/error.h"
@@ -1270,10 +1269,6 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     uint8_t *pci_conf = pdev->config;
 
     pci_config_set_interrupt_pin(pci_conf, 1);
-
-    if (msi_init(pdev, 0, 1, true, false, errp)) {
-        return;
-    }
 
     qemu_mutex_init(&hermes->thr_mutex);
     qemu_cond_init(&hermes->thr_cond);
