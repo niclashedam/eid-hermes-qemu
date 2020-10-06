@@ -33,6 +33,7 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
+#include "hw/pci/msix.h"
 #include "qemu/main-loop.h" /* iothread mutex */
 #include "qapi/visitor.h"
 #include "qapi/error.h"
@@ -94,6 +95,12 @@
 
 #define W1S(old, new) ((old) | (new))
 #define W1C(old, new) ((old) & ~(new))
+
+#define HERMES_MSIX_IDX     1
+#define HERMES_MSIX_VEC_NUM 32
+#define HERMES_MSIX_SIZE    (32 * KiB)
+#define HERMES_MSIX_TABLE_OFFSET (0x0000)
+#define HERMES_MSIX_PBA_OFFSET   (0x4000)
 
 struct hermes_bar0 {
     uint32_t ehver;
@@ -217,6 +224,7 @@ struct HermesState {
     MemoryRegion hermes_bar4;
     MemoryRegion hermes_ram;
     MemoryRegion hermes_mmio;
+    MemoryRegion msix;
 
     struct ubpf_vm *vm;
 
@@ -1263,6 +1271,55 @@ static void *hermes_cmd_thread(void *opaque)
     return NULL;
 }
 
+static void
+hermes_unuse_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i;
+    for (i = 0; i < num_vectors; i++) {
+        msix_vector_unuse(PCI_DEVICE(hermes), i);
+    }
+}
+
+static bool
+hermes_use_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i;
+    for (i = 0; i < num_vectors; i++) {
+        int res = msix_vector_use(PCI_DEVICE(hermes), i);
+        if (res < 0) {
+            trace_hermes_msix_use_vector_fail(i, res);
+            hermes_unuse_msix_vectors(hermes, i);
+            return false;
+        }
+    }
+    return true;
+}
+
+static void hermes_init_msix(HermesState *hermes)
+{
+    PCIDevice *dev = PCI_DEVICE(hermes);
+    int res = msix_init(dev, HERMES_MSIX_VEC_NUM, &hermes->msix,
+                        HERMES_MSIX_IDX, HERMES_MSIX_TABLE_OFFSET,
+                        &hermes->msix, HERMES_MSIX_IDX, HERMES_MSIX_PBA_OFFSET,
+                        0x0, NULL);
+    if (res < 0) {
+        trace_hermes_msix_init_fail(res);
+    } else {
+        if (!hermes_use_msix_vectors(hermes, HERMES_MSIX_VEC_NUM)) {
+            msix_uninit(dev, &hermes->msix, &hermes->msix);
+        }
+    }
+}
+
+static void
+hermes_cleanup_msix(HermesState *hermes)
+{
+    if (msix_present(PCI_DEVICE(hermes))) {
+        hermes_unuse_msix_vectors(hermes, HERMES_MSIX_VEC_NUM);
+        msix_uninit(PCI_DEVICE(hermes), &hermes->msix, &hermes->msix);
+    }
+}
+
 static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
     HermesState *hermes = HERMES(pdev);
@@ -1280,6 +1337,11 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
                           HERMES_BAR0_SIZE);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                      &hermes->bar0->mem_reg);
+
+    memory_region_init(&hermes->msix, OBJECT(hermes), "hermes-msix",
+                       HERMES_MSIX_SIZE);
+    pci_register_bar(pdev, HERMES_MSIX_IDX, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                     &hermes->msix);
 
     memory_region_init_io(&hermes->bar2->mem_reg, OBJECT(hermes),
                           &hermes_bar2_ops, hermes, "hermes-bar2",
@@ -1302,6 +1364,8 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     pci_register_bar(pdev, 4,
             PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
             &hermes->hermes_bar4);
+
+    hermes_init_msix(hermes);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
@@ -1316,6 +1380,8 @@ static void pci_hermes_uninit(PCIDevice *pdev)
 
     qemu_cond_destroy(&hermes->thr_cond);
     qemu_mutex_destroy(&hermes->thr_mutex);
+
+    hermes_cleanup_msix(hermes);
 }
 
 static void init_bar2(HermesState *hermes)
