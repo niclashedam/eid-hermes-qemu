@@ -599,11 +599,12 @@ static void do_dma(struct hermes_bar2 *bar2, bool h2c)
     struct hermes_bar2_sgdma_reg *sgdma_reg;
     struct hermes_bar2_irq_reg *irq = &bar2->irq;
     HermesState *hermes = bar2->parent;
-    struct hermes_dma_desc desc;
+    struct hermes_dma_desc *desc;
     hwaddr desc_addr;
     hwaddr src_addr, dst_off;
     void *bar4_base = memory_region_get_ram_ptr(&hermes->hermes_ram);
     unsigned irq_vector;
+    unsigned num_desc;
 
     if (h2c) {
         sgdma_reg = &bar2->h2c_sgdma;
@@ -621,32 +622,55 @@ static void do_dma(struct hermes_bar2 *bar2, bool h2c)
     /* Set engine as busy */
     atomic_or(&engine_reg->status, 0x1);
 
+    /*
+     * There is always at least one descriptor, plus the adjacent ones (which
+     * could be 0). Only bits 5:0 of the register are defined
+     */
+    num_desc = 1 + (sgdma_reg->desc_num_adj & 0x3F);
+    trace_hermes_dma_num_adj(num_desc);
+
+    desc = malloc(num_desc * sizeof(*desc));
+    if (!desc) {
+        fprintf(stderr, "[Hermes] Failed to alloc memory for DMA descriptor\n");
+        return;
+    }
+
     /* Read DMA descriptor */
     desc_addr = ((uint64_t) sgdma_reg->desc_high_addr) << 32 |
                 sgdma_reg->desc_low_addr;
-    pci_dma_read(&hermes->pdev, desc_addr, &desc, sizeof(desc));
-
-    trace_hermes_dma_desc(desc.ctrl, desc.len, desc.src_addr_lo,
-                          desc.src_addr_hi, desc.dst_addr_lo, desc.dst_addr_hi,
-                          desc.nxt_addr_lo, desc.nxt_addr_hi);
+    pci_dma_read(&hermes->pdev, desc_addr, desc, num_desc * sizeof(*desc));
+    for (int i = 0; i < num_desc; i++) {
+        trace_hermes_dma_desc(desc[i].ctrl, desc[i].len, desc[i].src_addr_lo,
+                              desc[i].src_addr_hi, desc[i].dst_addr_lo,
+                              desc[i].dst_addr_hi, desc[i].nxt_addr_lo,
+                              desc[i].nxt_addr_hi);
+    }
 
     /* DMA in */
     if (h2c) {
-        src_addr = ((uint64_t) desc.src_addr_hi << 32) | desc.src_addr_lo;
-        dst_off = ((uint64_t) desc.dst_addr_hi << 32) | desc.dst_addr_lo;
-        trace_hermes_dma("H2C", src_addr, dst_off);
-        pci_dma_read(&bar2->parent->pdev, src_addr, bar4_base + dst_off,
-                     desc.len);
+        for (int i = 0; i < num_desc; i++) {
+            src_addr = ((uint64_t) desc[i].src_addr_hi << 32)
+                       | desc[i].src_addr_lo;
+            dst_off = ((uint64_t) desc[i].dst_addr_hi << 32)
+                      | desc[i].dst_addr_lo;
+            trace_hermes_dma("H2C", src_addr, dst_off);
+            pci_dma_read(&bar2->parent->pdev, src_addr, bar4_base + dst_off,
+                         desc[i].len);
+        }
     } else {
-        src_addr = ((uint64_t) desc.src_addr_hi << 32) | desc.src_addr_lo;
-        dst_off = ((uint64_t) desc.dst_addr_hi << 32) | desc.dst_addr_lo;
-        trace_hermes_dma("C2H", src_addr, dst_off);
-        pci_dma_write(&bar2->parent->pdev, dst_off, bar4_base + src_addr,
-                     desc.len);
+        for (int i = 0; i < num_desc; i++) {
+            src_addr = ((uint64_t) desc[i].src_addr_hi << 32)
+                       | desc[i].src_addr_lo;
+            dst_off = ((uint64_t) desc[i].dst_addr_hi << 32)
+                      | desc[i].dst_addr_lo;
+            trace_hermes_dma("C2H", src_addr, dst_off);
+            pci_dma_write(&bar2->parent->pdev, dst_off, bar4_base + src_addr,
+                         desc[i].len);
+        }
     }
 
     /* Set number of completed descriptors */
-    engine_reg->cmp_desc_count = 1;
+    engine_reg->cmp_desc_count = num_desc;
 
     /* Set engine as not busy */
     atomic_and(&engine_reg->status, ~1);

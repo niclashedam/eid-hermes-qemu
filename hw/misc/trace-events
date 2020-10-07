@@ -226,3 +226,4 @@ hermes_msix_use_vector_fail(uint32_t vec, int32_t res) "Failed to use MSI-X vect
 hermes_dma_desc(uint32_t ctrl, uint32_t len, uint32_t src_addr_lo, uint32_t src_addr_hi, uint32_t dst_addr_lo, uint32_t dst_addr_hi, uint32_t nxt_addr_lo, uint32_t nxt_addr_hi) "Hermes DMA Desc: ctrl: 0x%"PRIx32" len: 0x%"PRIx32" src_addr_lo: 0x%"PRIx32" src_addr_hi: 0x%"PRIx32" dst_addr_lo: 0x%"PRIx32" dst_addr_hi: 0x%"PRIx32" nxt_addr_lo: 0x%"PRIx32" nxt_addr_hi: 0x%"PRIx32""
 hermes_dma(const char *channel, uint64_t src, uint64_t dst) "Hermes DMA %s 0x%" PRIx64" 0x%" PRIx64
 hermes_msix_notify(unsigned vector) "Hermes MSI-X notify %u"
+hermes_dma_num_adj(unsigned num_adj) "%u"
