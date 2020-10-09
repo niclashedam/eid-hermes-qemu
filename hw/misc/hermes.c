@@ -571,6 +571,8 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
         break;
     }
 
+    fprintf(stderr, "hwaddr = %lx size = %u val = %llx\n", addr, size, val);
+
     return val;
 }
 
