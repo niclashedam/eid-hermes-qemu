@@ -26,6 +26,7 @@
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
+#include "hw/pci/msix.h"
 #include "qapi/error.h"
 #include "trace.h"
 
@@ -41,6 +42,8 @@
  * https://www.xilinx.com/support/documentation/ip_documentation/xdma/v4_1/pg195-pcie-dma.pdf
  */
 #define HERMES_MSIX_VEC_NUM       32
+#define HERMES_MSIX_TABLE_OFFSET  0x8000
+#define HERMES_MSIX_PBA_OFFSET    0x8FE0
 
 /*
  * See Xilinx PG195 for more details on these enums and defines
@@ -754,6 +757,59 @@ static const MemoryRegionOps hermes_bar2_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static void hermes_unuse_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i;
+    for (i = 0; i < num_vectors; i++) {
+        msix_vector_unuse(PCI_DEVICE(hermes), i);
+    }
+}
+
+static bool hermes_use_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i, ret;
+
+    for (i = 0; i < num_vectors; i++) {
+        ret = msix_vector_use(PCI_DEVICE(hermes), i);
+        if (ret < 0) {
+            error_report("Failed to use MSI-X vector %d: error %d\n", i, ret);
+            hermes_unuse_msix_vectors(hermes, i);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void hermes_init_msix(HermesState *hermes, Error **errp)
+{
+    PCIDevice *dev = PCI_DEVICE(hermes);
+    Error *err = NULL;
+
+    int ret = msix_init(dev, HERMES_MSIX_VEC_NUM, &hermes->bar2_mem_reg, 2,
+                        HERMES_MSIX_TABLE_OFFSET,
+                        &hermes->bar2_mem_reg, 2, HERMES_MSIX_PBA_OFFSET,
+                        0x0, &error_fatal);
+    if (ret < 0) {
+        if (ret == -ENOTSUP) {
+            warn_report_err(err);
+        } else {
+            error_propagate(errp, err);
+        }
+    } else if (!hermes_use_msix_vectors(hermes, HERMES_MSIX_VEC_NUM)) {
+        msix_uninit(dev, &hermes->bar2_mem_reg, &hermes->bar2_mem_reg);
+    }
+}
+
+static void hermes_cleanup_msix(HermesState *hermes)
+{
+    if (msix_present(PCI_DEVICE(hermes))) {
+        hermes_unuse_msix_vectors(hermes, HERMES_MSIX_VEC_NUM);
+        msix_uninit(PCI_DEVICE(hermes), &hermes->bar2_mem_reg,
+                    &hermes->bar2_mem_reg);
+    }
+}
+
 static void hermes_instance_init(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
@@ -789,10 +845,15 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     pci_register_bar(pdev, 4,
             PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH |
             PCI_BASE_ADDRESS_MEM_TYPE_64, &hermes->bar4_mem_reg);
+
+    hermes_init_msix(hermes, errp);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
 {
+    HermesState *hermes = HERMES(pdev);
+
+    hermes_cleanup_msix(hermes);
 }
 
 static void hermes_class_init(ObjectClass *class, void *data)
