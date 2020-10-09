@@ -175,6 +175,17 @@ struct hermes_bar4 {
     MemoryRegion mem_reg;
 };
 
+struct hermes_dma_desc {
+    uint32_t ctrl;
+    uint32_t len;
+    uint32_t src_addr_lo;
+    uint32_t src_addr_hi;
+    uint32_t dst_addr_lo;
+    uint32_t dst_addr_hi;
+    uint32_t nxt_addr_lo;
+    uint32_t nxt_addr_hi;
+};
+
 struct HermesState {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
@@ -208,6 +219,111 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
 static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
+}
+
+static int __do_dma(struct HermesState *hermes, hwaddr desc_addr,
+                       uint8_t num_desc, bool h2c)
+{
+    struct hermes_dma_desc *desc;
+    hwaddr src_addr, dst_addr, nxt_addr;
+    uint8_t nxt_adj;
+    void *bar4_base = memory_region_get_ram_ptr(&hermes->bar4->mem_reg);
+
+    trace_hermes_dma_num_adj(num_desc - 1);
+    desc = malloc(num_desc * sizeof(*desc));
+    if (!desc) {
+        fprintf(stderr, "[Hermes] Failed to alloc memory for DMA descriptor\n");
+        return -1;
+    }
+
+    /* Read DMA descriptors */
+    pci_dma_read(&hermes->pdev, desc_addr, desc, num_desc * sizeof(*desc));
+    for (int i = 0; i < num_desc; i++) {
+        trace_hermes_dma_desc(desc[i].ctrl, desc[i].len, desc[i].src_addr_lo,
+                              desc[i].src_addr_hi, desc[i].dst_addr_lo,
+                              desc[i].dst_addr_hi, desc[i].nxt_addr_lo,
+                              desc[i].nxt_addr_hi);
+    }
+
+    /* DMA all descriptors in this block */
+    for (int i = 0; i < num_desc; i++) {
+        src_addr = ((uint64_t) desc[i].src_addr_hi << 32) | desc[i].src_addr_lo;
+        dst_addr = ((uint64_t) desc[i].dst_addr_hi << 32) | desc[i].dst_addr_lo;
+
+        if (h2c) {
+            trace_hermes_dma("H2C", src_addr, dst_addr);
+            pci_dma_read(&hermes->bar2->parent->pdev, src_addr,
+                         bar4_base + dst_addr, desc[i].len);
+        } else {
+            trace_hermes_dma("C2H", src_addr, dst_addr);
+            pci_dma_write(&hermes->bar2->parent->pdev, dst_addr,
+                          bar4_base + src_addr, desc[i].len);
+        }
+    }
+
+    nxt_addr = ((uint64_t) desc[num_desc - 1].nxt_addr_hi << 32)
+               | desc[num_desc - 1].nxt_addr_lo;
+    if (nxt_addr) {
+        nxt_adj = (desc[num_desc - 1].ctrl >> 8) & 0x3F;
+        num_desc += __do_dma(hermes, nxt_addr, nxt_adj + 1, h2c);
+    }
+
+    return num_desc;
+}
+
+static void do_dma(struct hermes_bar2 *bar2, bool h2c)
+{
+    struct hermes_bar2_engine_reg *engine_reg;
+    struct hermes_bar2_sgdma_reg *sgdma_reg;
+    struct hermes_bar2_irq_reg *irq = &bar2->irq;
+    HermesState *hermes = bar2->parent;
+    hwaddr desc_addr;
+    unsigned irq_vector;
+    unsigned num_desc;
+
+    if (h2c) {
+        sgdma_reg = &bar2->h2c_sgdma;
+        engine_reg = &bar2->h2c;
+        irq_vector = 0;
+    } else {
+        sgdma_reg = &bar2->c2h_sgdma;
+        engine_reg = &bar2->c2h;
+        irq_vector = 1;
+    }
+
+    /* Reset number of completed descriptors */
+    engine_reg->cmp_desc_count = 0;
+
+    /* Set engine as busy */
+    atomic_or(&engine_reg->status, 0x1);
+
+    /*
+     * There is always at least one descriptor, plus the adjacent ones (which
+     * could be 0). Only bits 5:0 of the register are defined
+     */
+    num_desc = 1 + (sgdma_reg->desc_num_adj & 0x3F);
+    desc_addr = ((uint64_t) sgdma_reg->desc_high_addr) << 32 |
+                sgdma_reg->desc_low_addr;
+    num_desc = __do_dma(hermes, desc_addr, num_desc, h2c);
+
+    /* Set number of completed descriptors */
+    engine_reg->cmp_desc_count = num_desc;
+
+    /* Set engine as not busy */
+    atomic_and(&engine_reg->status, ~1);
+
+    if (irq->chnl_inter_enable_mask & (irq_vector + 1)) {
+        /* Set interrupt source */
+        irq->chnl_inter_request =  irq->chnl_inter_enable_mask &
+                                   (irq_vector + 1);
+
+        /*
+         * Send interrupt. Since we currently have only one channel for H2C and
+         * one for C2H, we have that IRQ 0 is H2C and IRQ 1 is C2H
+         */
+        trace_hermes_msix_notify(irq_vector);
+        msix_notify(PCI_DEVICE(hermes), irq_vector);
+    }
 }
 
 static const MemoryRegionOps hermes_bar0_ops = {
@@ -309,7 +425,7 @@ static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
     case 0x04:
         reg->control = 0x0FFFFE7F & val;
         if (reg->control & 0x1) {
-            /* do_dma */
+            do_dma(bar2, h2c);
         }
         break;
     case 0x08:
