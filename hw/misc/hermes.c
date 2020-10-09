@@ -26,6 +26,7 @@
 #include "qemu/error-report.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
+#include "qapi/error.h"
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
@@ -62,6 +63,7 @@ static const struct hermes_bar0 {
 struct HermesState{
     PCIDevice pdev;
     MemoryRegion bar0_mem_reg;
+    MemoryRegion bar4_mem_reg;
 };
 
 static inline void hermes_bar_warn_invalid(unsigned bar, hwaddr addr)
@@ -136,6 +138,15 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
                           HERMES_BAR0_SIZE);
     pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                      &hermes->bar0_mem_reg);
+
+    memory_region_init_ram(&hermes->bar4_mem_reg, OBJECT(hermes),
+                           "hermes-bar4",
+                           bar0_init.ehdsoff +
+                           bar0_init.ehdssze * bar0_init.ehdslot, &error_fatal);
+
+    pci_register_bar(pdev, 4,
+            PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH |
+            PCI_BASE_ADDRESS_MEM_TYPE_64, &hermes->bar4_mem_reg);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
