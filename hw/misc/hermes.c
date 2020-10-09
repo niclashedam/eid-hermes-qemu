@@ -191,6 +191,14 @@ struct HermesState {
     struct hermes_bar0 *bar0;
     struct hermes_bar2 *bar2;
     struct hermes_bar4 *bar4;
+
+    bool stopping;
+    QemuCond h2c_cond;
+    QemuCond c2h_cond;
+    QemuMutex h2c_mutex;
+    QemuMutex c2h_mutex;
+    QemuThread h2c_thread;
+    QemuThread c2h_thread;
 };
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
@@ -425,7 +433,11 @@ static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
     case 0x04:
         reg->control = 0x0FFFFE7F & val;
         if (reg->control & 0x1) {
-            do_dma(bar2, h2c);
+            if (h2c) {
+                qemu_cond_signal(&bar2->parent->h2c_cond);
+            } else {
+                qemu_cond_signal(&bar2->parent->c2h_cond);
+            }
         }
         break;
     case 0x08:
@@ -1145,6 +1157,42 @@ static void hermes_instance_finalize(Object *obj)
     }
 }
 
+static void hermes_dma_thread(HermesState *hermes, bool h2c)
+{
+    QemuMutex *mtx;
+    QemuCond *cond;
+
+    if (h2c) {
+        mtx = &hermes->h2c_mutex;
+        cond = &hermes->h2c_cond;
+    } else {
+        mtx = &hermes->c2h_mutex;
+        cond = &hermes->c2h_cond;
+    }
+
+    qemu_mutex_lock(mtx);
+    while (1) {
+        if (hermes->stopping) {
+            break;
+        }
+        qemu_cond_wait(cond, mtx);
+        do_dma(hermes->bar2, h2c);
+    }
+    qemu_mutex_unlock(mtx);
+}
+
+static void *hermes_h2c_dma_thread(void *opaque)
+{
+    hermes_dma_thread(opaque, true);
+    return NULL;
+}
+
+static void *hermes_c2h_dma_thread(void *opaque)
+{
+    hermes_dma_thread(opaque, false);
+    return NULL;
+}
+
 static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
     HermesState *hermes = HERMES(pdev);
@@ -1175,11 +1223,34 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
                 PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
                 &hermes->bar4->mem_reg);
     }
+
+    hermes->stopping = false;
+    qemu_mutex_init(&hermes->h2c_mutex);
+    qemu_mutex_init(&hermes->c2h_mutex);
+    qemu_cond_init(&hermes->h2c_cond);
+    qemu_cond_init(&hermes->c2h_cond);
+    qemu_thread_create(&hermes->h2c_thread, "h2c-dma", hermes_h2c_dma_thread,
+                       hermes, QEMU_THREAD_JOINABLE);
+    qemu_thread_create(&hermes->c2h_thread, "c2h-dma", hermes_c2h_dma_thread,
+                       hermes, QEMU_THREAD_JOINABLE);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
 {
     HermesState *hermes = HERMES(pdev);
+
+    hermes->stopping = true;
+    qemu_cond_signal(&hermes->h2c_cond);
+    qemu_cond_signal(&hermes->c2h_cond);
+
+    qemu_thread_join(&hermes->h2c_thread);
+    qemu_thread_join(&hermes->c2h_thread);
+
+    qemu_cond_destroy(&hermes->h2c_cond);
+    qemu_cond_destroy(&hermes->c2h_cond);
+
+    qemu_mutex_destroy(&hermes->h2c_mutex);
+    qemu_mutex_destroy(&hermes->c2h_mutex);
 
     hermes_cleanup_msix(hermes);
 }
