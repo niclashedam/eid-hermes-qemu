@@ -24,11 +24,14 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
+#include "qapi/error.h"
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
 
 #define HERMES_BAR0_SIZE          (32 * MiB)
+#define HERMES_BAR4_SIZE          (128 * MiB)
+
 #define HERMES_EHVER_OFF     0x00
 #define HERMES_EHTS_OFF      0x04
 #define HERMES_EHENG_OFF     0x08
@@ -49,6 +52,10 @@
 #define HERMES_EHPSOFF_VAL   0
 #define HERMES_EHDSOFF_VAL   (HERMES_EHPSSZE_VAL * HERMES_EHPSLOT_VAL)
 
+QEMU_BUILD_BUG_MSG(HERMES_EHDSSZE_VAL * HERMES_EHDSLOT_VAL +
+                   HERMES_EHPSSZE_VAL * HERMES_EHPSLOT_VAL > HERMES_BAR4_SIZE,
+                   "Hermes: BAR4 is too small, it won't fit all program and data slots");
+
 struct hermes_bar0 {
     uint32_t ehver;
     uint32_t ehts;
@@ -66,9 +73,14 @@ struct hermes_bar0 {
     MemoryRegion mem_reg;
 };
 
+struct hermes_bar4 {
+    MemoryRegion mem_reg;
+};
+
 typedef struct {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
+    struct hermes_bar4 *bar4;
 } HermesState;
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
@@ -133,6 +145,10 @@ static void hermes_instance_init(Object *obj)
     } else {
         fprintf(stderr, "Hermes: Failed to allocate memory for BAR 0\n");
     }
+
+    hermes->bar4 = malloc(sizeof(*hermes->bar4));
+    if (!hermes->bar4) {
+        fprintf(stderr, "Hermes: Failed to allocate memory for BAR 4\n");
     }
 }
 
@@ -141,6 +157,9 @@ static void hermes_instance_finalize(Object *obj)
     HermesState *hermes = HERMES(obj);
     if (hermes->bar0) {
         free(hermes->bar0);
+    }
+    if (hermes->bar4) {
+        free(hermes->bar4);
     }
 }
 
@@ -154,6 +173,14 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
                               HERMES_BAR0_SIZE);
         pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                          &hermes->bar0->mem_reg);
+    }
+
+    if (hermes->bar4) {
+        memory_region_init_ram(&hermes->bar4->mem_reg, OBJECT(hermes),
+                               "hermes-bar4", HERMES_BAR4_SIZE, &error_fatal);
+        pci_register_bar(pdev, 4,
+                PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
+                &hermes->bar4->mem_reg);
     }
 }
 
