@@ -141,6 +141,11 @@ struct hermes_bar2_dir_reg {
     void (*perform_dma)(HermesState *hermes, hwaddr src_addr, hwaddr dst_addr,
                         dma_addr_t len);
     int irq_vector;
+    void *(*entry)(void*);
+    const char *name;
+    QemuCond dma_cond;
+    QemuMutex dma_mutex;
+    QemuThread dma_thread;
 };
 
 struct hermes_bar2 {
@@ -157,6 +162,8 @@ struct HermesState {
     MemoryRegion bar4_mem_reg;
 
     struct hermes_bar2 bar2;
+
+    bool stopping;
 };
 
 struct hermes_dma_desc {
@@ -263,6 +270,34 @@ static void hermes_c2h_dma(HermesState *hermes, hwaddr src_addr,
     pci_dma_write(&hermes->pdev, dst_addr, bar4_base + src_addr, len);
 }
 
+static void hermes_dma_thread(HermesState *hermes,
+                              struct hermes_bar2_dir_reg *dir)
+{
+    qemu_mutex_lock(&dir->dma_mutex);
+    while (1) {
+        qemu_cond_wait(&dir->dma_cond, &dir->dma_mutex);
+        if (hermes->stopping) {
+            break;
+        }
+        do_dma(hermes, dir);
+    }
+    qemu_mutex_unlock(&dir->dma_mutex);
+}
+
+static void *hermes_h2c_dma_thread(void *opaque)
+{
+    HermesState *hermes = opaque;
+    hermes_dma_thread(hermes, &hermes->bar2.h2c);
+    return NULL;
+}
+
+static void *hermes_c2h_dma_thread(void *opaque)
+{
+    HermesState *hermes = opaque;
+    hermes_dma_thread(hermes, &hermes->bar2.c2h);
+    return NULL;
+}
+
 static const struct hermes_bar2 bar2_init = {
     .h2c = {
         .channel = {
@@ -285,6 +320,8 @@ static const struct hermes_bar2 bar2_init = {
         },
         .perform_dma = hermes_h2c_dma,
         .irq_vector = 0,
+        .entry = &hermes_h2c_dma_thread,
+        .name = "h2c-dma",
     },
     .c2h = {
         .channel = {
@@ -303,6 +340,8 @@ static const struct hermes_bar2 bar2_init = {
         },
         .perform_dma = hermes_c2h_dma,
         .irq_vector = 1,
+        .entry = &hermes_c2h_dma_thread,
+        .name = "c2h-dma",
     },
     .irq = {
         .identifier = HERMES_ID_CORE | HERMES_ID_IRQ | HERMES_ID_VER_20164,
@@ -437,7 +476,9 @@ static uint64_t hermes_bar2_engine_write(HermesState *hermes,
     case 0x04:
         reg->control = 0x0FFFFE7F & val;
         if (reg->control & 0x1) {
-            do_dma(hermes, dir);
+            qemu_mutex_lock(&dir->dma_mutex);
+            qemu_cond_signal(&dir->dma_cond);
+            qemu_mutex_unlock(&dir->dma_mutex);
         }
         break;
     case 0x08:
@@ -931,6 +972,24 @@ static void hermes_instance_finalize(Object *obj)
 {
 }
 
+static void hermes_bar2_init_dir_reg(HermesState *hermes,
+                                     struct hermes_bar2_dir_reg *dir)
+{
+    qemu_mutex_init(&dir->dma_mutex);
+    qemu_cond_init(&dir->dma_cond);
+    qemu_thread_create(&dir->dma_thread, dir->name, dir->entry, hermes,
+                       QEMU_THREAD_JOINABLE);
+}
+
+static void hermes_bar2_destroy_dir_reg(struct hermes_bar2_dir_reg *dir)
+{
+    qemu_cond_signal(&dir->dma_cond);
+    qemu_thread_join(&dir->dma_thread);
+    qemu_cond_destroy(&dir->dma_cond);
+    qemu_mutex_destroy(&dir->dma_mutex);
+
+}
+
 static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
     HermesState *hermes = HERMES(pdev);
@@ -958,11 +1017,19 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
             PCI_BASE_ADDRESS_MEM_TYPE_64, &hermes->bar4_mem_reg);
 
     hermes_init_msix(hermes, errp);
+
+    hermes->stopping = false;
+    hermes_bar2_init_dir_reg(hermes, &hermes->bar2.h2c);
+    hermes_bar2_init_dir_reg(hermes, &hermes->bar2.c2h);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
 {
     HermesState *hermes = HERMES(pdev);
+
+    hermes->stopping = true;
+    hermes_bar2_destroy_dir_reg(&hermes->bar2.h2c);
+    hermes_bar2_destroy_dir_reg(&hermes->bar2.c2h);
 
     hermes_cleanup_msix(hermes);
 }
