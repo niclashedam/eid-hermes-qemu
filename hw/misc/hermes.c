@@ -25,11 +25,13 @@
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
 #include "qapi/error.h"
+#include "trace.h"
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
 
 #define HERMES_BAR0_SIZE          (32 * MiB)
+#define HERMES_BAR2_SIZE          (64 * KiB)
 #define HERMES_BAR4_SIZE          (128 * MiB)
 
 #define HERMES_EHVER_OFF     0x00
@@ -52,9 +54,14 @@
 #define HERMES_EHPSOFF_VAL   0
 #define HERMES_EHDSOFF_VAL   (HERMES_EHPSSZE_VAL * HERMES_EHPSLOT_VAL)
 
+#define W1S(old, new) ((old) | (new))
+#define W1C(old, new) ((old) & ~(new))
+
 QEMU_BUILD_BUG_MSG(HERMES_EHDSSZE_VAL * HERMES_EHDSLOT_VAL +
                    HERMES_EHPSSZE_VAL * HERMES_EHPSLOT_VAL > HERMES_BAR4_SIZE,
                    "Hermes: BAR4 is too small, it won't fit all program and data slots");
+
+typedef struct HermesState HermesState;
 
 struct hermes_bar0 {
     uint32_t ehver;
@@ -73,15 +80,102 @@ struct hermes_bar0 {
     MemoryRegion mem_reg;
 };
 
+struct hermes_bar2_engine_reg {
+    uint32_t identifier;         /* 0x00 */
+    uint32_t control;            /* 0x04, 0x08 and 0x0C */
+    uint32_t status;             /* 0x40 and 0x44 */
+    uint32_t cmp_desc_count;     /* 0x48 */
+    uint32_t alignment;          /* 0x4C */
+    uint32_t wb_addr_low;        /* 0x88 */
+    uint32_t wb_addr_high;       /* 0x8C */
+    uint32_t inter_enable_mask;  /* 0x90, 0x94 and 0x98 */
+    uint32_t pmc;                /* 0xC0 */
+    uint32_t pcc0;               /* 0xC4 */
+    uint32_t pcc1;               /* 0xC4 */
+    uint32_t pdc0;               /* 0xCC */
+    uint32_t pdc1;               /* 0xD0 */
+};
+
+struct hermes_bar2_irq_reg {
+    uint32_t identifier;              /* 0x00 */
+    uint32_t user_inter_enable_mask;  /* 0x04, 0x08 and 0x0C */
+    uint32_t chnl_inter_enable_mask;  /* 0x10, 0x14 and 0x18 */
+    uint32_t user_inter_request;      /* 0x40 */
+    uint32_t chnl_inter_request;      /* 0x44 */
+    uint32_t user_inter_pending;      /* 0x48 */
+    uint32_t chnl_inter_pending;      /* 0x4C */
+    uint32_t user_vct_num0;           /* 0x80 */
+    uint32_t user_vct_num1;           /* 0x84 */
+    uint32_t user_vct_num2;           /* 0x88 */
+    uint32_t user_vct_num3;           /* 0x8C */
+    uint32_t chnl_vct_num0;           /* 0xA0 */
+    uint32_t chnl_vct_num1;           /* 0xA4 */
+};
+
+struct hermes_bar2_cfg_reg {
+    uint32_t identifier;          /* 0x00 */
+    uint32_t busdev;              /* 0x04 */
+    uint32_t pcie_mpl;            /* 0x08 */
+    uint32_t pcie_mrrs;           /* 0x0C */
+    uint32_t sysid;               /* 0x10 */
+    uint32_t msi_enable;          /* 0x14 */
+    uint32_t pcie_data_w;         /* 0x18 */
+    uint32_t pcie_ctrl;           /* 0x1C */
+    uint32_t axi_usr_mpl;         /* 0x40 */
+    uint32_t axi_usr_mrrs;        /* 0x44 */
+    uint32_t write_flush_timeout; /* 0x60 */
+};
+
+struct hermes_bar2_sgdma_reg {
+    uint32_t identifier;     /* 0x00 */
+    uint32_t desc_low_addr;  /* 0x80 */
+    uint32_t desc_high_addr; /* 0x84 */
+    uint32_t desc_num_adj;   /* 0x88 */
+    uint32_t desc_credits;   /* 0x8C */
+};
+
+struct hermes_bar2_sgdma_common_reg {
+    uint32_t identifier;              /* 0x00 */
+    uint32_t desc_ctrl;               /* 0x10, 0x14 and 0x18 */
+    uint32_t desc_credit_mode_enable; /* 0x20, 0x24 and 0x28 */
+};
+
+struct hermes_bar2_msix_pba_reg {
+    uint32_t vec0_addr_low;   /* 0x00 */
+    uint32_t vec0_addr_high;  /* 0x04 */
+    uint32_t vec0_data;       /* 0x08 */
+    uint32_t vec0_ctrl;       /* 0x0C */
+    uint32_t vec31_addr_low;  /* 0x1F0 */
+    uint32_t vec31_addr_high; /* 0x1F4 */
+    uint32_t vec31_data;      /* 0x1F8 */
+    uint32_t vec31_ctrl;      /* 0x1FC */
+    uint32_t pba;             /* 0xFE0 */
+};
+
+struct hermes_bar2 {
+    struct hermes_bar2_engine_reg h2c;
+    struct hermes_bar2_engine_reg c2h;
+    struct hermes_bar2_irq_reg irq;
+    struct hermes_bar2_cfg_reg cfg;
+    struct hermes_bar2_sgdma_reg h2c_sgdma;
+    struct hermes_bar2_sgdma_reg c2h_sgdma;
+    struct hermes_bar2_sgdma_common_reg sgdma_common;
+    struct hermes_bar2_msix_pba_reg msix_pba;
+
+    MemoryRegion mem_reg;
+    HermesState *parent;
+};
+
 struct hermes_bar4 {
     MemoryRegion mem_reg;
 };
 
-typedef struct {
+struct HermesState {
     PCIDevice pdev;
     struct hermes_bar0 *bar0;
+    struct hermes_bar2 *bar2;
     struct hermes_bar4 *bar4;
-} HermesState;
+};
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
 {
@@ -125,6 +219,716 @@ static const MemoryRegionOps hermes_bar0_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
+static uint64_t hermes_bar2_engine_read(struct hermes_bar2 *bar2, hwaddr addr,
+                                        bool h2c)
+{
+    uint64_t val = ~0ULL;
+
+    struct hermes_bar2_engine_reg *reg;
+    if (h2c) {
+        reg = &bar2->h2c;
+    } else {
+        reg = &bar2->c2h;
+    }
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+    case 0x08:
+    case 0x0C:
+        val = reg->control;
+        break;
+    case 0x40:
+        val = reg->status & 0xFFFFFF;
+        break;
+    case 0x44:
+        val = reg->status & 0xFFFFFF;
+        /* Clear on Read, except bit 0 */
+        reg->status = reg->status & 0x1;
+        break;
+    case 0x48:
+        val = reg->cmp_desc_count;
+        break;
+    case 0x4C:
+        val = reg->alignment & 0xFFFFFF;
+        break;
+    case 0x88:
+        val = reg->wb_addr_low;
+        break;
+    case 0x8C:
+        val = reg->wb_addr_high;
+        break;
+    case 0x90:
+    case 0x94:
+    case 0x98:
+        val = reg->inter_enable_mask & 0xFFFFFE;
+        break;
+    case 0xC0:
+        /* Bits 0 and 2 are RW, bit 1 is WO */
+        val = reg->pmc & 0x5;
+        break;
+    case 0xC4:
+        val = reg->pcc0;
+        break;
+    case 0xC8:
+        val = reg->pcc1 & 0xFFFF;
+        break;
+    case 0xCC:
+        val = reg->pdc0;
+        break;
+    case 0xD0:
+        val = reg->pdc1 & 0xFFFF;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_engine_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                         uint32_t val, bool h2c)
+{
+    struct hermes_bar2_engine_reg *reg;
+
+    if (h2c) {
+        reg = &bar2->h2c;
+    } else {
+        reg = &bar2->c2h;
+    }
+
+    switch (addr) {
+    case 0x04:
+        reg->control = 0x0FFFFE7F & val;
+        if (reg->control & 0x1) {
+            /* do_dma */
+        }
+        break;
+    case 0x08:
+        /* W1S */
+        reg->control = W1S(reg->control, val);
+        break;
+    case 0x0C:
+        /* W1C */
+        reg->control = W1C(reg->control, val);
+        break;
+    case 0x40:
+        /* Bits 31:24 are not in the spec. Bit 0 is RO, bits 23:1 are RW1C */
+        reg->status = W1C(reg->status, val) & 0xFFFFFE;
+        break;
+    case 0x88:
+        reg->wb_addr_low = val;
+        break;
+    case 0x8C:
+        reg->wb_addr_high = val;
+        break;
+    case 0x90:
+        /* Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = reg->inter_enable_mask & 0xFFFFFE;
+        break;
+    case 0x94:
+        /* W1S. Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = W1S(reg->inter_enable_mask, val) & 0xFFFFFE;
+        break;
+    case 0x98:
+        /* W1C. Bits 31:24 and 0 are not in the spec */
+        reg->inter_enable_mask = W1C(reg->inter_enable_mask, val) & 0xFFFFFE;
+        break;
+    case 0xC0:
+        /* Only bits 2:0 are in the spec */
+        reg->pmc = val & 0x7;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_irq_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_irq_reg *reg = &bar2->irq;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+        val = reg->user_inter_enable_mask;
+        break;
+    case 0x10:
+        val = reg->chnl_inter_enable_mask;
+        break;
+    case 0x40:
+        val = reg->user_inter_request;
+        break;
+    case 0x44:
+        val = reg->chnl_inter_request;
+        break;
+    case 0x48:
+        val = reg->user_inter_pending;
+        break;
+    case 0x4C:
+        val = reg->chnl_inter_pending;
+        break;
+    case 0x80:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num0 & 0x1F1F1F1F;
+        break;
+    case 0x84:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num1 & 0x1F1F1F1F;
+        break;
+    case 0x88:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num2 & 0x1F1F1F1F;
+        break;
+    case 0x8C:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->user_vct_num3 & 0x1F1F1F1F;
+        break;
+    case 0xA0:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->chnl_vct_num0 & 0x1F1F1F1F;
+        break;
+    case 0xA4:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        val = reg->chnl_vct_num1 & 0x1F1F1F1F;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_irq_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                      uint32_t val)
+{
+    struct hermes_bar2_irq_reg *reg = &bar2->irq;
+    switch (addr) {
+    case 0x04:
+        reg->user_inter_enable_mask = val;
+        break;
+    case 0x08:
+        reg->user_inter_enable_mask = W1S(reg->user_inter_enable_mask, val);
+        break;
+    case 0x0C:
+        reg->user_inter_enable_mask = W1C(reg->user_inter_enable_mask, val);
+        break;
+    case 0x10:
+        reg->chnl_inter_enable_mask = val;
+        break;
+    case 0x14:
+        reg->chnl_inter_enable_mask = W1S(reg->chnl_inter_enable_mask, val);
+        break;
+    case 0x18:
+        reg->chnl_inter_enable_mask = W1C(reg->chnl_inter_enable_mask, val);
+        break;
+    case 0x80:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num0 = val & 0x1F1F1F1F;
+        break;
+    case 0x84:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num1 = val & 0x1F1F1F1F;
+        break;
+    case 0x88:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num2 = val & 0x1F1F1F1F;
+        break;
+    case 0x8C:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->user_vct_num3 = val & 0x1F1F1F1F;
+        break;
+    case 0xA0:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->chnl_vct_num0 = val & 0x1F1F1F1F;
+        break;
+    case 0xA4:
+        /* Only bits 28:24, 20:16, 12:8 and 4:0 are defined */
+        reg->chnl_vct_num1 = val & 0x1F1F1F1F;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_cfg_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_cfg_reg *reg = &bar2->cfg;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x04:
+        /* Only bits 15:0 are defined */
+        val = reg->busdev & 0xFFFF;
+        break;
+    case 0x08:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_mpl & 0x7;
+        break;
+    case 0x0C:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_mrrs & 0x7;
+        break;
+    case 0x10:
+        /* Only bits 15:0 are defined */
+        val = reg->sysid & 0xFFFF;
+        break;
+    case 0x14:
+        /* Only bits 2:0 are defined */
+        val = reg->msi_enable & 0x7;
+        break;
+    case 0x18:
+        /* Only bits 2:0 are defined */
+        val = reg->pcie_data_w & 0x7;
+        break;
+    case 0x1C:
+        /* Only bit 0 is defined */
+        val = reg->pcie_ctrl & 0x1;
+        break;
+    case 0x40:
+        /* Only bits 6:4 and 2:0 are defined */
+        val = reg->axi_usr_mpl & 0x77;
+        break;
+    case 0x44:
+        /* Only bits 6:4 and 2:0 are defined */
+        val = reg->axi_usr_mrrs & 0x77;
+        break;
+    case 0x60:
+        /* Only bits 4:0 are defined */
+        val = reg->write_flush_timeout & 0x1F;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_cfg_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                      uint32_t val)
+{
+    struct hermes_bar2_cfg_reg *reg = &bar2->cfg;
+    switch (addr) {
+    case 0x1C:
+        /* Only bit 0 is writable */
+        reg->pcie_ctrl = val & 0x1;
+        break;
+    case 0x40:
+        /* Only bits 2:0 are writable */
+        reg->axi_usr_mpl = (reg->axi_usr_mpl & ~0x7) & (val & 0x7);
+        break;
+    case 0x44:
+        /* Only bits 2:0 are writable */
+        reg->axi_usr_mrrs = (reg->axi_usr_mrrs & ~0x7) & (val & 0x7);
+        break;
+    case 0x60:
+        /* Only bits 4:0 are writable */
+        reg->write_flush_timeout = val & 0x1F;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_read(struct hermes_bar2 *bar2, hwaddr addr,
+                                       bool h2c)
+{
+    struct hermes_bar2_sgdma_reg *reg;
+    uint64_t val = ~0ULL;
+
+    if (h2c) {
+        reg = &bar2->h2c_sgdma;
+    } else {
+        reg = &bar2->c2h_sgdma;
+    }
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x80:
+        val = reg->desc_low_addr;
+        break;
+    case 0x84:
+        val = reg->desc_high_addr;
+        break;
+    case 0x88:
+        /* Only bits 5:0 are defined */
+        val = reg->desc_num_adj & 0x3F;
+        break;
+    case 0x8C:
+        /* Only bits 9:0 are defined */
+        val = reg->desc_credits & 0x3FF;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_write(struct hermes_bar2 *bar2, hwaddr addr,
+                                        uint32_t val, bool h2c)
+{
+    struct hermes_bar2_sgdma_reg *reg;
+
+    if (h2c) {
+        reg = &bar2->h2c_sgdma;
+    } else {
+        reg = &bar2->c2h_sgdma;
+    }
+    switch (addr) {
+    case 0x80:
+        reg->desc_low_addr = val;
+        break;
+    case 0x84:
+        reg->desc_high_addr = val;
+        break;
+    case 0x88:
+        /* Only bits 5:0 are defined */
+        reg->desc_num_adj = val & 0x3F;
+        break;
+    case 0x8C:
+        /* Only bits 9:0 are defined */
+        reg->desc_credits = val & 0x3FF;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_common_read(struct hermes_bar2 *bar2,
+                                              hwaddr addr)
+{
+    struct hermes_bar2_sgdma_common_reg *reg = &bar2->sgdma_common;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->identifier;
+        break;
+    case 0x10:
+    case 0x14:
+    case 0x18:
+        /* Only bits 19:16 and 3:0 are defined */
+        val = reg->desc_ctrl & 0xF000F;
+        break;
+    case 0x20:
+    case 0x24:
+    case 0x28:
+        /* Only bits 19:16 and 3:0 are defined */
+        val = reg->desc_credit_mode_enable & 0xF000F;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_sgdma_common_write(struct hermes_bar2 *bar2,
+                                               hwaddr addr, uint32_t val)
+{
+    struct hermes_bar2_sgdma_common_reg *reg = &bar2->sgdma_common;
+
+    switch (addr) {
+    case 0x10:
+        /* Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = val & 0xF000F;
+        break;
+    case 0x14:
+        /* W1S. Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = W1S(reg->desc_ctrl, val & 0xF000F);
+        break;
+    case 0x18:
+        /* W1C. Only bits 19:16 and 3:0 are defined */
+        reg->desc_ctrl = W1C(reg->desc_ctrl, val & 0xF000F);
+        break;
+    case 0x20:
+        /* Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = val & 0xF000F;
+        break;
+    case 0x24:
+        /* W1S. Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = W1S(reg->desc_credit_mode_enable,
+                                           val & 0xF000F);
+        break;
+    case 0x28:
+        /* W1C. Only bits 19:16 and 3:0 are defined */
+        reg->desc_credit_mode_enable = W1C(reg->desc_credit_mode_enable,
+                                           val & 0xF000F);
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_msix_pba_read(struct hermes_bar2 *bar2, hwaddr addr)
+{
+    struct hermes_bar2_msix_pba_reg *reg = &bar2->msix_pba;
+    uint64_t val = ~0ULL;
+
+    switch (addr) {
+    case 0x00:
+        val = reg->vec0_addr_low;
+        break;
+    case 0x04:
+        val = reg->vec0_addr_high;
+        break;
+    case 0x08:
+        val = reg->vec0_data;
+        break;
+    case 0x0C:
+        val = reg->vec0_ctrl;
+        break;
+    case 0x1F0:
+        val = reg->vec31_addr_low;
+        break;
+    case 0x1F4:
+        val = reg->vec31_addr_high;
+        break;
+    case 0x1F8:
+        val = reg->vec31_data;
+        break;
+    case 0x1FC:
+        val = reg->vec31_ctrl;
+        break;
+    case 0xFE0:
+        val = reg->pba;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_msix_pba_write(struct hermes_bar2 *bar2,
+                                           hwaddr addr, uint32_t val)
+{
+    struct hermes_bar2_msix_pba_reg *reg = &bar2->msix_pba;
+    switch (addr) {
+    case 0x00:
+        reg->vec0_addr_low = val;
+        break;
+    case 0x04:
+        reg->vec0_addr_high = val;
+        break;
+    case 0x08:
+        reg->vec0_data = val;
+        break;
+    case 0x0C:
+        reg->vec0_ctrl = val;
+        break;
+    case 0x1F0:
+        reg->vec31_addr_low = val;
+        break;
+    case 0x1F4:
+        reg->vec31_addr_high = val;
+        break;
+    case 0x1F8:
+        reg->vec31_data = val;
+        break;
+    case 0x1FC:
+        reg->vec31_ctrl = val;
+        break;
+    case 0xFE0:
+        reg->pba = val;
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = %0xlx\n",
+                addr, val);
+        break;
+    }
+
+    return val;
+}
+
+static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
+{
+    HermesState *hermes = opaque;
+    uint64_t val = ~0ULL;
+
+    switch ((addr & 0xFFFF) >> 12) {
+    case 0x0:
+        val = hermes_bar2_engine_read(hermes->bar2, addr & 0xFF, true);
+        break;
+    case 0x1:
+        val = hermes_bar2_engine_read(hermes->bar2, addr & 0xFF, false);
+        break;
+    case 0x2:
+        val = hermes_bar2_irq_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x3:
+        val = hermes_bar2_cfg_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x4:
+        val = hermes_bar2_sgdma_read(hermes->bar2, addr & 0xFF, true);
+        break;
+    case 0x5:
+        val = hermes_bar2_sgdma_read(hermes->bar2, addr & 0xFF, false);
+        break;
+    case 0x6:
+        val = hermes_bar2_sgdma_common_read(hermes->bar2, addr & 0xFF);
+        break;
+    case 0x8:
+        val = hermes_bar2_msix_pba_read(hermes->bar2, addr & 0xFFF);
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid read. Addr = 0x%lx\n", addr);
+        break;
+    }
+
+    trace_hermes_bar2_read(size, addr, val);
+
+    return val;
+}
+
+static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
+                unsigned size)
+{
+    HermesState *hermes = opaque;
+
+    trace_hermes_bar2_write(size, addr, val);
+
+    switch ((addr & 0xFFFF) >> 12) {
+    case 0x0:
+        hermes_bar2_engine_write(hermes->bar2, addr & 0xFF, val, true);
+        break;
+    case 0x1:
+        hermes_bar2_engine_write(hermes->bar2, addr & 0xFF, val, false);
+        break;
+    case 0x2:
+        val = hermes_bar2_irq_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x3:
+        val = hermes_bar2_cfg_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x4:
+        val = hermes_bar2_sgdma_write(hermes->bar2, addr & 0xFF, val, true);
+        break;
+    case 0x5:
+        val = hermes_bar2_sgdma_write(hermes->bar2, addr & 0xFF, val, false);
+        break;
+    case 0x6:
+        val = hermes_bar2_sgdma_common_write(hermes->bar2, addr & 0xFF, val);
+        break;
+    case 0x8:
+        val = hermes_bar2_msix_pba_write(hermes->bar2, addr & 0xFFF, val);
+        break;
+    default:
+        fprintf(stderr, "Hermes: Invalid write. Addr = 0x%lx Value = 0x%lx\n",
+                addr, val);
+        break;
+    }
+}
+
+static const MemoryRegionOps hermes_bar2_ops = {
+    .read = hermes_bar2_read,
+    .write = hermes_bar2_write,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .impl = {
+        .min_access_size = 4,
+        .max_access_size = 8,
+    },
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
+static void bar2_init(HermesState *hermes)
+{
+    hermes->bar2 = calloc(1, sizeof(*hermes->bar2));
+    if (!hermes->bar2) {
+        fprintf(stderr, "Failed to allocate memory for BAR 2\n");
+        return;
+    }
+
+    /* All of these match AWS F1 */
+    hermes->bar2->h2c.identifier = (0x1FC << 20) | (0x5);
+    /*
+     * FIXME: We probably want to enable control bits 18:9 (log and stop engine
+     * on read/write errors) and maybe 23:19 as well (log and stop on desc
+     * error)
+     *
+     * AWS F1 also enables bits 4:1, so register value is 0x00F83E1E
+     *
+     * hermes->bar2->h2c.control = 0x00F83E1E
+     */
+    hermes->bar2->h2c.alignment = 0x00010140;
+    /*
+     * FIXME: this should match h2c.control
+     * hermes->bar2->h2c.inter_enable_mask = 0x00F83E1E;
+     */
+
+    hermes->bar2->c2h.identifier = (0x1FC << 20) | (0x1 << 16) | (0x5);
+    /*
+     * FIXME: See comment about h2c.control
+     *
+     * hermes->bar2->c2h.control = 0x00F83E1E;
+     */
+    hermes->bar2->c2h.alignment = 0x00010140;
+    /*
+     * FIXME: See comment about h2.inter_enable_mask
+     * hermes->bar2->c2h.inter_enable_mask = 0x00F83E1E;
+     */
+
+    hermes->bar2->irq.identifier = (0x1FC << 20) | (0x2 << 16) | (0x5);
+
+    hermes->bar2->cfg.identifier = (0x1FC << 20) | (0x3 << 16) | (0x5);
+    hermes->bar2->cfg.busdev = 0;
+    hermes->bar2->cfg.pcie_mpl = 1; /* mpl = 256 bytes */
+    hermes->bar2->cfg.pcie_mrrs = 2; /* mrrs = 512 bytes */
+    hermes->bar2->cfg.sysid = 0x1234;
+    hermes->bar2->cfg.msi_enable = 2; /* MSI disabled, MSI-X enabled */
+    hermes->bar2->cfg.pcie_data_w = 3; /* 512 bits */
+    hermes->bar2->cfg.pcie_ctrl = 1;
+    hermes->bar2->cfg.axi_usr_mpl = (0x5 << 4) | (0x5);
+    hermes->bar2->cfg.axi_usr_mrrs = (0x5 << 4) | (0x5);
+
+    hermes->bar2->h2c_sgdma.identifier = (0x1FC << 20) | (0x4 << 16) | (0x5);
+    hermes->bar2->c2h_sgdma.identifier = (0x1FC << 20) | (0x5 << 16) | (0x5);
+    hermes->bar2->sgdma_common.identifier = (0x1FC << 20) | (0x6 << 16) | (0x5);
+    hermes->bar2->msix_pba.vec0_ctrl = 0xFFFFFFFF;
+    hermes->bar2->msix_pba.vec31_ctrl = 0xFFFFFFFF;
+
+    hermes->bar2->parent = hermes;
+}
+
 static void hermes_instance_init(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
@@ -146,6 +950,13 @@ static void hermes_instance_init(Object *obj)
         fprintf(stderr, "Hermes: Failed to allocate memory for BAR 0\n");
     }
 
+    hermes->bar2 = malloc(sizeof(*hermes->bar2));
+    if (hermes->bar2) {
+        bar2_init(hermes);
+    } else {
+        fprintf(stderr, "Hermes: Failed to allocate memory for BAR 2\n");
+    }
+
     hermes->bar4 = malloc(sizeof(*hermes->bar4));
     if (!hermes->bar4) {
         fprintf(stderr, "Hermes: Failed to allocate memory for BAR 4\n");
@@ -156,6 +967,9 @@ static void hermes_instance_finalize(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
     if (hermes->bar0) {
+        free(hermes->bar0);
+    }
+    if (hermes->bar2) {
         free(hermes->bar0);
     }
     if (hermes->bar4) {
@@ -173,6 +987,15 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
                               HERMES_BAR0_SIZE);
         pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
                          &hermes->bar0->mem_reg);
+    }
+
+    if (hermes->bar2) {
+        memory_region_init_io(&hermes->bar2->mem_reg, OBJECT(hermes),
+                              &hermes_bar2_ops, hermes, "hermes-bar2",
+                              HERMES_BAR2_SIZE);
+        pci_register_bar(pdev, 2,
+                PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
+                &hermes->bar2->mem_reg);
     }
 
     if (hermes->bar4) {
