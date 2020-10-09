@@ -21,15 +21,103 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include "qemu-version.h"
 #include "qemu/osdep.h"
+#include "qemu/error-report.h"
+#include "qemu/units.h"
 #include "hw/pci/pci.h"
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
 
-typedef struct {
+#define HERMES_BAR0_SIZE          (32 * MiB)
+
+typedef struct HermesState HermesState;
+
+static const struct hermes_bar0 {
+    uint32_t ehver;
+    char ehbld[48];
+
+    uint8_t eheng;
+    uint8_t ehpslot;
+    uint8_t ehdslot;
+    uint8_t rsv0;
+
+    uint32_t ehpsoff;
+    uint32_t ehpssze;
+    uint32_t ehdsoff;
+    uint32_t ehdssze;
+} bar0_init = {
+    .ehver =  1,
+    .ehbld = QEMU_PKGVERSION,
+    .eheng = 1,
+    .ehpslot = 16,
+    .ehdslot = 16,
+    .ehpsoff = 0,
+    .ehpssze = 1 * MiB,
+    .ehdsoff = 16 * MiB, /* must be >= ehpslot * ehpssze */
+    .ehdssze = 1 * MiB,
+};
+
+struct HermesState{
     PCIDevice pdev;
-} HermesState;
+    MemoryRegion bar0_mem_reg;
+};
+
+static inline void hermes_bar_warn_invalid(unsigned bar, hwaddr addr)
+{
+    warn_report("Hermes: Accessed invalid BAR%d register: 0x%lX", bar, addr);
+}
+
+static inline void hermes_bar_warn_read_only(unsigned bar, hwaddr addr)
+{
+    warn_report("Hermes: Tried to write to BAR%d read-only register: 0x%lX",
+                bar, addr);
+}
+
+static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
+{
+    uint32_t *ptr;
+    uint32_t val = 0;
+
+    if (addr + size <= sizeof(struct hermes_bar0)) {
+        ptr = (uint32_t *) &((uint8_t *) &bar0_init)[addr];
+        val = *ptr;
+        switch (size) {
+        case 1:
+            val &= 0xFF;
+            break;
+        case 2:
+            val &= 0xFFFF;
+            break;
+        }
+    } else {
+        hermes_bar_warn_invalid(0, addr);
+    }
+
+    return val;
+}
+
+/* BAR 0 is read-only */
+static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
+                unsigned size)
+{
+    hermes_bar_warn_read_only(0, addr);
+}
+
+static const MemoryRegionOps hermes_bar0_ops = {
+    .read = hermes_bar0_read,
+    .write = hermes_bar0_write,
+    .valid = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .impl = {
+        .min_access_size = 1,
+        .max_access_size = 4,
+    },
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
 
 static void hermes_instance_init(Object *obj)
 {
@@ -41,6 +129,13 @@ static void hermes_instance_finalize(Object *obj)
 
 static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
+    HermesState *hermes = HERMES(pdev);
+
+    memory_region_init_io(&hermes->bar0_mem_reg, OBJECT(hermes),
+                          &hermes_bar0_ops, hermes, "hermes-bar0",
+                          HERMES_BAR0_SIZE);
+    pci_register_bar(pdev, 0, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                     &hermes->bar0_mem_reg);
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
