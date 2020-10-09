@@ -221,3 +221,5 @@ pca955x_gpio_change(const char *description, unsigned id, unsigned prev_state, u
 # hermes.c
 hermes_bar2_read(unsigned int size, uint64_t addr, uint64_t value) "Hermes BAR2 read sz:%u addr:0x%"PRIx64" data:0x%"PRIx64
 hermes_bar2_write(unsigned int size, uint64_t addr, uint64_t value) "Hermes BAR2 write sz:%u addr:0x%"PRIx64" data:0x%"PRIx64
+hermes_msix_init_fail(int32_t error) "Failed to initialize MSI-X, error %d"
+hermes_msix_use_vector_fail(uint32_t vec, int32_t error) "Failed to use MSI-X vector %d, error %d"

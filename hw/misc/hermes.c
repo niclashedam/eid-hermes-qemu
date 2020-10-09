@@ -24,6 +24,7 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "hw/pci/pci.h"
+#include "hw/pci/msix.h"
 #include "qapi/error.h"
 #include "trace.h"
 
@@ -53,6 +54,10 @@
 #define HERMES_EHDSSZE_VAL   (1 * MiB)
 #define HERMES_EHPSOFF_VAL   0
 #define HERMES_EHDSOFF_VAL   (HERMES_EHPSSZE_VAL * HERMES_EHPSLOT_VAL)
+
+#define HERMES_MSIX_VEC_NUM      32
+#define HERMES_MSIX_TABLE_OFFSET (0x8000)
+#define HERMES_MSIX_PBA_OFFSET   (0x8FE0)
 
 #define W1S(old, new) ((old) | (new))
 #define W1C(old, new) ((old) & ~(new))
@@ -929,6 +934,53 @@ static void bar2_init(HermesState *hermes)
     hermes->bar2->parent = hermes;
 }
 
+static void hermes_unuse_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i;
+    for (i = 0; i < num_vectors; i++) {
+        msix_vector_unuse(PCI_DEVICE(hermes), i);
+    }
+}
+
+static bool hermes_use_msix_vectors(HermesState *hermes, int num_vectors)
+{
+    int i;
+    for (i = 0; i < num_vectors; i++) {
+        int res = msix_vector_use(PCI_DEVICE(hermes), i);
+        if (res < 0) {
+            trace_hermes_msix_use_vector_fail(i, res);
+            hermes_unuse_msix_vectors(hermes, i);
+            return false;
+        }
+    }
+    return true;
+}
+
+static void hermes_init_msix(HermesState *hermes)
+{
+    PCIDevice *dev = PCI_DEVICE(hermes);
+    int res = msix_init(dev, HERMES_MSIX_VEC_NUM, &hermes->bar2->mem_reg, 2,
+                        HERMES_MSIX_TABLE_OFFSET,
+                        &hermes->bar2->mem_reg, 2, HERMES_MSIX_PBA_OFFSET,
+                        0x0, &error_fatal);
+    if (res < 0) {
+        trace_hermes_msix_init_fail(res);
+    } else {
+        if (!hermes_use_msix_vectors(hermes, HERMES_MSIX_VEC_NUM)) {
+            msix_uninit(dev, &hermes->bar2->mem_reg, &hermes->bar2->mem_reg);
+        }
+    }
+}
+
+static void hermes_cleanup_msix(HermesState *hermes)
+{
+    if (msix_present(PCI_DEVICE(hermes))) {
+        hermes_unuse_msix_vectors(hermes, HERMES_MSIX_VEC_NUM);
+        msix_uninit(PCI_DEVICE(hermes), &hermes->bar2->mem_reg,
+                    &hermes->bar2->mem_reg);
+    }
+}
+
 static void hermes_instance_init(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
@@ -996,6 +1048,8 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
         pci_register_bar(pdev, 2,
                 PCI_BASE_ADDRESS_SPACE_MEMORY | PCI_BASE_ADDRESS_MEM_PREFETCH,
                 &hermes->bar2->mem_reg);
+
+        hermes_init_msix(hermes);
     }
 
     if (hermes->bar4) {
@@ -1009,6 +1063,9 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 
 static void pci_hermes_uninit(PCIDevice *pdev)
 {
+    HermesState *hermes = HERMES(pdev);
+
+    hermes_cleanup_msix(hermes);
 }
 
 static void hermes_class_init(ObjectClass *class, void *data)
