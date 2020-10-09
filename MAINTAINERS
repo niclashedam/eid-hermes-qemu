@@ -2065,6 +2065,13 @@ F: hw/rx/
 F: include/hw/intc/rx_icu.h
 F: include/hw/rx/
 
+Hermes
+M: Martin Oliveira <martin.oliveira@eideticom.com>
+R: Stephen Bates <stephen.bates@eideticom.com>
+W: https://github.com/Eideticom/eid-hermes/
+S: Supported
+F: hw/misc/hermes.c
+
 Subsystems
 ----------
 Audio
