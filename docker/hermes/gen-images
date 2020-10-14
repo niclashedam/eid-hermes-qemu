@@ -1,0 +1,59 @@
+#!/bin/bash
+#
+# gen-rootfs
+#
+# (C) 2020 Stephen Bates (stephen@eideticom)
+#
+# A simple script to generate a Ubuntu Focal Fossa based rootfs for
+# the eid-hermes QEMU VM(s). Note user is 'hermes' and password is
+# 'zeus'.
+
+NAME=${NAME:-hermes-vm}
+SIZE=${SIZE:-8}
+DIR=${DIR:-images}
+
+cat << EOF > cloud-config-${NAME}
+#cloud-config
+hostname: ${NAME}
+disable_root: true
+ssh_pwauth: true
+users:
+  - name: hermes
+    lock_passwd: false
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin
+    home: /home/hermes
+    shell: /bin/bash
+    plain_text_passwd: 'zeus'
+packages:
+  - ansible
+  - build-essential
+  - emacs-nox
+  - tree
+EOF
+
+cat << EOF > network-config-${NAME}
+version: 2
+ethernets:
+  ens3:
+     dhcp4: true
+     # default QEMU userspace network
+     gateway4: 10.0.2.2
+     nameservers:
+       addresses: [ 10.0.2.3,8.8.8.8 ]
+EOF
+
+mkdir -p ${DIR}
+if [ ! -f ${DIR}/focal-server-cloudimg-amd64.img ]; then
+    wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img \
+	 -O ${DIR}/focal-server-cloudimg-amd64.img
+fi
+
+cp ${DIR}/focal-server-cloudimg-amd64.img ${DIR}/${NAME}.qcow2
+qemu-img resize ${DIR}/${NAME}.qcow2 ${SIZE}G
+cloud-localds -v --network-config=network-config-${NAME} \
+	      $DIR/${NAME}-seed.qcow2 cloud-config-${NAME}
+
+qemu-img create -f qcow2 ${DIR}/nvme.qcow2 512M
+
+rm -f cloud-config-${NAME} network-config-${NAME}
