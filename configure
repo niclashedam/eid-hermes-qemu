@@ -519,6 +519,7 @@ fuzzing="no"
 rng_none="no"
 secret_keyring=""
 libdaxctl=""
+libubpf=""
 
 supported_cpu="no"
 supported_os="no"
@@ -1639,6 +1640,10 @@ for opt do
   --enable-libdaxctl) libdaxctl=yes
   ;;
   --disable-libdaxctl) libdaxctl=no
+  ;;
+  --disable-libubpf) libubpf="no"
+  ;;
+  --enable-libubpf) libubpf="yes"
   ;;
   *)
       echo "ERROR: unknown option $opt"
@@ -4311,6 +4316,25 @@ if test "$tpm" = ""; then
 elif test "$tpm" = "yes"; then
   if test "$mingw32" = "yes" ; then
     error_exit "TPM emulation only available on POSIX systems"
+  fi
+fi
+
+##########################################
+# libubpf probe
+
+if test "$libubpf" != "no" ; then
+  cat > $TMPC <<EOF
+#include <stdbool.h>
+#include <ubpf.h>
+int main(void) { ubpf_create(); return 0; }
+EOF
+  if compile_prog "" "-lubpf" ; then
+    libubpf=yes
+  else
+    if test "$libubpf" = "yes" ; then
+      feature_not_found "libubpf" "Install libubpf"
+    fi
+    libubpf=no
   fi
 fi
 
@@ -7019,6 +7043,7 @@ echo "fuzzing support   $fuzzing"
 echo "gdb               $gdb_bin"
 echo "rng-none          $rng_none"
 echo "Linux keyring     $secret_keyring"
+echo "libubpf           $libubpf"
 
 if test "$supported_cpu" = "no"; then
     echo
@@ -7444,6 +7469,9 @@ if test "$linux_io_uring" = "yes" ; then
   echo "CONFIG_LINUX_IO_URING=y" >> $config_host_mak
   echo "LINUX_IO_URING_CFLAGS=$linux_io_uring_cflags" >> $config_host_mak
   echo "LINUX_IO_URING_LIBS=$linux_io_uring_libs" >> $config_host_mak
+fi
+if test "$libubpf" = "yes" ; then
+  echo "CONFIG_LIBUBPF=y" >> $config_host_mak
 fi
 if test "$attr" = "yes" ; then
   echo "CONFIG_ATTR=y" >> $config_host_mak
