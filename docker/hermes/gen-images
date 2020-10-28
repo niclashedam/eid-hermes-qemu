@@ -30,6 +30,9 @@ packages:
   - build-essential
   - emacs-nox
   - tree
+runcmd:
+  - [ git, clone, https://github.com/Eideticom/eid-hermes.git, --depth, 1, /tmp/eid-hermes ]
+  - [ ansible-playbook, /tmp/eid-hermes/ansible/hermes.yml ]
 EOF
 
 cat << EOF > network-config-${NAME}

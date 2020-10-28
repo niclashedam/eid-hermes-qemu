@@ -10,11 +10,12 @@ device model.
 ## Quick Start
 
 1. ```./gen-images``` - pulls the Ubuntu Focal cloud image and
-generates a cloud-init based configuration disk for it. Also generates
-a blank image for the NVMe SSD device model. **NOTE** that you only
-have to do this step once. The rootfs will presist across container
-builds unless you rerun this script. If you do rerun this script you
-will lose any local changes you have made to the rootfs.
+generates a cloud-init based configuration disk for it, which installs
+some base packages and runs an [ansible playbook][2] to setup the xdma driver and
+other programs. Also generates a blank image for the NVMe SSD device model.
+**NOTE** that you only have to do this step once. The rootfs will presist
+across container builds unless you rerun this script. If you do rerun this
+script you will lose any local changes you have made to the rootfs.
 
 3. ```docker-compose up --build``` - optionally builds and then spins
 up a docker container that runs the eid-hermes based VM. It also opens
@@ -32,3 +33,6 @@ your known_hosts each time you regenerate the images. The password is
 
 1. Add support for optionally passing QEMU a specific kernel to use in
 the VM via the -kernel command line argument.
+
+[1]: https://github.com/Eideticom/eid-hermes/
+[2]: https://github.com/Eideticom/eid-hermes/blob/master/ansible/hermes.yml
