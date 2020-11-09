@@ -200,7 +200,7 @@ static int hermes_execute_descs(HermesState *hermes,
     }
 
     *desc_addr = desc[*num_desc - 1].nxt_addr;
-    *num_desc = (desc[*num_desc - 1].ctrl >> 8) & 0x3F;
+    *num_desc = 1 + ((desc[*num_desc - 1].ctrl >> 8) & 0x3F);
 
     g_free(desc);
 
