@@ -37,6 +37,11 @@
 #define HERMES_BAR0_SIZE          (32 * MiB)
 #define HERMES_BAR2_SIZE          (64 * KiB)
 
+#define HERMES_EHENG                 1
+#define HERMES_BAR0_CMDS_OFFSET      0x1000
+#define HERMES_BAR0_CMDS_END         (HERMES_BAR0_CMDS_OFFSET + HERMES_EHENG * \
+                                     sizeof(struct hermes_cmd_req_res))
+
 /*
  * We use the XDMA IP for interrupts. For details, see:
  * https://github.com/aws/aws-fpga/tree/master/sdk/linux_kernel_drivers/xdma
@@ -82,10 +87,12 @@ static struct hermes_bar0 {
     const uint32_t ehpssze;
     const uint32_t ehdsoff;
     const uint32_t ehdssze;
+
+    struct hermes_cmd_req_res cmds[HERMES_EHENG];
 } bar0_init = {
     .ehver =  1,
     .ehbld = QEMU_PKGVERSION,
-    .eheng = 1,
+    .eheng = HERMES_EHENG,
     .ehpslot = 16,
     .ehdslot = 16,
     .ehpsoff = 0,
@@ -373,12 +380,22 @@ static inline void hermes_bar_warn_unimplemented(unsigned bar, hwaddr addr)
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
 {
     HermesState *hermes = opaque;
-    uint32_t *ptr;
+    uint32_t *ptr = NULL;
     uint32_t val = 0;
 
-    if (addr + size <= sizeof(struct hermes_bar0)) {
+    if (addr + size <= offsetof(struct hermes_bar0, cmds)) {
         ptr = (uint32_t *) &((uint8_t *) &hermes->bar0)[addr];
+    } else if (addr >= HERMES_BAR0_CMDS_OFFSET &&
+               addr + size <= HERMES_BAR0_CMDS_END) {
+        addr -= HERMES_BAR0_CMDS_OFFSET;
+        ptr = (uint32_t *) &((uint8_t *) &hermes->bar0.cmds)[addr];
+    } else {
+        hermes_bar_warn_invalid(0, addr);
+    }
+
+    if (ptr) {
         val = *ptr;
+
         switch (size) {
         case 1:
             val &= 0xFF;
@@ -387,18 +404,55 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
             val &= 0xFFFF;
             break;
         }
-    } else {
-        hermes_bar_warn_invalid(0, addr);
     }
 
     return val;
 }
 
-/* BAR 0 is read-only */
 static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
-    hermes_bar_warn_read_only(0, addr);
+    HermesState *hermes = opaque;
+    uint8_t *ptr8 = NULL;
+    uint16_t *ptr16;
+    uint32_t *ptr32;
+    uint32_t cmd_regs_off;
+
+    if (addr + size <= offsetof(struct hermes_bar0, cmds)) {
+        hermes_bar_warn_read_only(0, addr);
+    } else if (addr >= HERMES_BAR0_CMDS_OFFSET &&
+               addr + size <= HERMES_BAR0_CMDS_END) {
+        addr -= HERMES_BAR0_CMDS_OFFSET;
+        cmd_regs_off = addr % sizeof(struct hermes_cmd_req_res);
+
+        /* Command Response registers are read-only */
+        if (cmd_regs_off >= sizeof(struct hermes_cmd_req)) {
+            hermes_bar_warn_read_only(0, addr);
+        } else {
+            ptr8 = (uint8_t *) hermes->bar0.cmds;
+        }
+    } else {
+        hermes_bar_warn_invalid(0, addr);
+    }
+
+    if (ptr8) {
+        switch (size) {
+        case 1:
+            val &= 0xFF;
+            ptr8[addr] = val;
+            break;
+        case 2:
+            val &= 0xFFFF;
+            ptr16 = (uint16_t *) &ptr8[addr];
+            *ptr16 = val;
+            break;
+        case 4:
+            val &= 0xFFFFFFFF;
+            ptr32 = (uint32_t *) &ptr8[addr];
+            *ptr32 = val;
+            break;
+        }
+    }
 }
 
 static const MemoryRegionOps hermes_bar0_ops = {
