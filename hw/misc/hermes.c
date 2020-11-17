@@ -162,6 +162,7 @@ struct HermesState {
     MemoryRegion bar2_mem_reg;
     MemoryRegion bar4_mem_reg;
 
+    struct hermes_bar0 bar0;
     struct hermes_bar2 bar2;
 
     bool stopping;
@@ -371,11 +372,12 @@ static inline void hermes_bar_warn_unimplemented(unsigned bar, hwaddr addr)
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
 {
+    HermesState *hermes = opaque;
     uint32_t *ptr;
     uint32_t val = 0;
 
     if (addr + size <= sizeof(struct hermes_bar0)) {
-        ptr = (uint32_t *) &((uint8_t *) &bar0_init)[addr];
+        ptr = (uint32_t *) &((uint8_t *) &hermes->bar0)[addr];
         val = *ptr;
         switch (size) {
         case 1:
@@ -966,6 +968,7 @@ static void hermes_cleanup_msix(HermesState *hermes)
 static void hermes_instance_init(Object *obj)
 {
     HermesState *hermes = HERMES(obj);
+    memcpy(&hermes->bar0, &bar0_init, sizeof(bar0_init));
     memcpy(&hermes->bar2, &bar2_init, sizeof(bar2_init));
 }
 
