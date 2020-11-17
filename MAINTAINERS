@@ -2071,6 +2071,7 @@ R: Stephen Bates <stephen.bates@eideticom.com>
 W: https://github.com/Eideticom/eid-hermes/
 S: Supported
 F: hw/misc/hermes.c
+F: hw/misc/hermes_cmd.h
 
 Subsystems
 ----------

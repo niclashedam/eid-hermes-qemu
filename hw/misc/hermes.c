@@ -29,6 +29,7 @@
 #include "hw/pci/msix.h"
 #include "qapi/error.h"
 #include "trace.h"
+#include "hermes_cmd.h"
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
