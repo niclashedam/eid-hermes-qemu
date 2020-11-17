@@ -69,19 +69,19 @@
 
 typedef struct HermesState HermesState;
 
-static const struct hermes_bar0 {
-    uint32_t ehver;
-    char ehbld[48];
+static struct hermes_bar0 {
+    const uint32_t ehver;
+    const char ehbld[48];
 
-    uint8_t eheng;
-    uint8_t ehpslot;
-    uint8_t ehdslot;
-    uint8_t rsv0;
+    const uint8_t eheng;
+    const uint8_t ehpslot;
+    const uint8_t ehdslot;
+    const uint8_t rsv0;
 
-    uint32_t ehpsoff;
-    uint32_t ehpssze;
-    uint32_t ehdsoff;
-    uint32_t ehdssze;
+    const uint32_t ehpsoff;
+    const uint32_t ehpssze;
+    const uint32_t ehdsoff;
+    const uint32_t ehdssze;
 } bar0_init = {
     .ehver =  1,
     .ehbld = QEMU_PKGVERSION,
