@@ -41,6 +41,9 @@
 #define HERMES_BAR0_CMDS_OFFSET      0x1000
 #define HERMES_BAR0_CMDS_END         (HERMES_BAR0_CMDS_OFFSET + HERMES_EHENG * \
                                      sizeof(struct hermes_cmd_req_res))
+#define HERMES_BAR0_CMDS_CTRL_OFFSET 0x2000
+#define HERMES_BAR0_CMDS_CTRL_END    (HERMES_BAR0_CMDS_CTRL_OFFSET + \
+                                     HERMES_EHENG)
 
 /*
  * We use the XDMA IP for interrupts. For details, see:
@@ -89,6 +92,7 @@ static struct hermes_bar0 {
     const uint32_t ehdssze;
 
     struct hermes_cmd_req_res cmds[HERMES_EHENG];
+    uint8_t cmd_ctrl[HERMES_EHENG];
 } bar0_init = {
     .ehver =  1,
     .ehbld = QEMU_PKGVERSION,
@@ -389,6 +393,10 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
                addr + size <= HERMES_BAR0_CMDS_END) {
         addr -= HERMES_BAR0_CMDS_OFFSET;
         ptr = (uint32_t *) &((uint8_t *) &hermes->bar0.cmds)[addr];
+    } else if (addr >= HERMES_BAR0_CMDS_CTRL_OFFSET &&
+               addr + size <= HERMES_BAR0_CMDS_CTRL_END) {
+        addr -= HERMES_BAR0_CMDS_CTRL_OFFSET;
+        ptr = (uint32_t *) &((uint8_t *) &hermes->bar0.cmd_ctrl)[addr];
     } else {
         hermes_bar_warn_invalid(0, addr);
     }
@@ -431,6 +439,11 @@ static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
         } else {
             ptr8 = (uint8_t *) hermes->bar0.cmds;
         }
+    } else if (addr >= HERMES_BAR0_CMDS_CTRL_OFFSET &&
+               addr + size <= HERMES_BAR0_CMDS_CTRL_END) {
+        ptr8 = (uint8_t *) bar0_init.cmd_ctrl;
+        addr -= HERMES_BAR0_CMDS_CTRL_OFFSET;
+        size = 1;
     } else {
         hermes_bar_warn_invalid(0, addr);
     }
