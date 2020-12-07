@@ -36,6 +36,9 @@
 #define HERMES_BAR0_SIZE          (32 * MiB)
 #define HERMES_BAR2_SIZE          (64 * KiB)
 
+#define H2C_CHANNELS              4
+#define C2H_CHANNELS              4
+
 /*
  * We use the XDMA IP for interrupts. For details, see:
  * https://github.com/aws/aws-fpga/tree/master/sdk/linux_kernel_drivers/xdma
@@ -142,15 +145,16 @@ struct hermes_bar2_dir_reg {
                         dma_addr_t len);
     int irq_vector;
     void *(*entry)(void*);
-    const char *name;
+    char name[16];
+    int ch;
     QemuCond dma_cond;
     QemuMutex dma_mutex;
     QemuThread dma_thread;
 };
 
 struct hermes_bar2 {
-    struct hermes_bar2_dir_reg h2c;
-    struct hermes_bar2_dir_reg c2h;
+    struct hermes_bar2_dir_reg h2c[H2C_CHANNELS];
+    struct hermes_bar2_dir_reg c2h[C2H_CHANNELS];
     struct hermes_bar2_irq_reg irq;
     struct hermes_bar2_cfg_reg cfg;
 };
@@ -173,6 +177,11 @@ struct hermes_dma_desc {
     hwaddr dst_addr;
     hwaddr nxt_addr;
 };
+
+static inline int addr2ch(hwaddr addr)
+{
+    return (addr & 0xF00) >> 8;
+}
 
 static int hermes_execute_descs(HermesState *hermes,
                                 struct hermes_bar2_dir_reg *dir,
@@ -286,20 +295,27 @@ static void hermes_dma_thread(HermesState *hermes,
 
 static void *hermes_h2c_dma_thread(void *opaque)
 {
-    HermesState *hermes = opaque;
-    hermes_dma_thread(hermes, &hermes->bar2.h2c);
+    struct hermes_bar2_dir_reg *dir = opaque;
+    struct hermes_bar2 *bar2 = container_of(dir,
+                               struct hermes_bar2, h2c[dir->ch]);
+    HermesState *hermes = container_of(bar2, HermesState, bar2);
+
+    hermes_dma_thread(hermes, dir);
     return NULL;
 }
 
 static void *hermes_c2h_dma_thread(void *opaque)
 {
-    HermesState *hermes = opaque;
-    hermes_dma_thread(hermes, &hermes->bar2.c2h);
+    struct hermes_bar2_dir_reg *dir = opaque;
+    struct hermes_bar2 *bar2 = container_of(dir,
+                               struct hermes_bar2, c2h[dir->ch]);
+    HermesState *hermes = container_of(bar2, HermesState, bar2);
+
+    hermes_dma_thread(hermes, dir);
     return NULL;
 }
 
-static const struct hermes_bar2 bar2_init = {
-    .h2c = {
+static const struct hermes_bar2_dir_reg h2c_init = {
         .channel = {
             .identifier = HERMES_ID_CORE | HERMES_ID_H2C_CHNL | HERMES_ID_VER_20164,
             /*
@@ -319,11 +335,10 @@ static const struct hermes_bar2 bar2_init = {
              */
         },
         .perform_dma = hermes_h2c_dma,
-        .irq_vector = 0,
         .entry = &hermes_h2c_dma_thread,
-        .name = "h2c-dma",
-    },
-    .c2h = {
+};
+
+static const struct hermes_bar2_dir_reg c2h_init = {
         .channel = {
             .identifier = HERMES_ID_CORE | HERMES_ID_C2H_CHNL | HERMES_ID_VER_20164,
             /*
@@ -339,10 +354,10 @@ static const struct hermes_bar2 bar2_init = {
              */
         },
         .perform_dma = hermes_c2h_dma,
-        .irq_vector = 1,
         .entry = &hermes_c2h_dma_thread,
-        .name = "c2h-dma",
-    },
+};
+
+static const struct hermes_bar2 bar2_init = {
     .irq = {
         .identifier = HERMES_ID_CORE | HERMES_ID_IRQ | HERMES_ID_VER_20164,
     },
@@ -819,15 +834,26 @@ static uint64_t hermes_bar2_msix_pba_write(hwaddr addr)
 
 static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 {
+    int ch = addr2ch(addr);
     HermesState *hermes = opaque;
     uint64_t val = ~0ULL;
 
     switch ((addr & 0xFFFF) >> 12) {
     case 0x0:
-        val = hermes_bar2_engine_read(hermes, &hermes->bar2.h2c, addr);
+        if (ch >= H2C_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_engine_read(hermes,
+                                          &hermes->bar2.h2c[ch], addr);
+        }
         break;
     case 0x1:
-        val = hermes_bar2_engine_read(hermes, &hermes->bar2.c2h, addr);
+        if (ch >= C2H_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_engine_read(hermes,
+                                          &hermes->bar2.c2h[ch], addr);
+        }
         break;
     case 0x2:
         val = hermes_bar2_irq_read(hermes, addr);
@@ -836,10 +862,20 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
         val = hermes_bar2_cfg_read(hermes, addr);
         break;
     case 0x4:
-        val = hermes_bar2_sgdma_read(hermes, &hermes->bar2.h2c, addr);
+        if (ch >= H2C_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_sgdma_read(hermes,
+                                         &hermes->bar2.h2c[ch], addr);
+        }
         break;
     case 0x5:
-        val = hermes_bar2_sgdma_read(hermes, &hermes->bar2.c2h, addr);
+        if (ch >= C2H_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_sgdma_read(hermes,
+                                         &hermes->bar2.c2h[ch], addr);
+        }
         break;
     case 0x6:
         val = hermes_bar2_sgdma_common_read(addr);
@@ -860,16 +896,27 @@ static uint64_t hermes_bar2_read(void *opaque, hwaddr addr, unsigned size)
 static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
+    int ch = addr2ch(addr);
     HermesState *hermes = opaque;
 
     trace_hermes_bar2_write(size, addr, val);
 
     switch ((addr & 0xFFFF) >> 12) {
     case 0x0:
-        val = hermes_bar2_engine_write(hermes, &hermes->bar2.h2c, addr, val);
+        if (ch >= H2C_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_engine_write(hermes,
+                                           &hermes->bar2.h2c[ch], addr, val);
+        }
         break;
     case 0x1:
-        val = hermes_bar2_engine_write(hermes, &hermes->bar2.c2h, addr, val);
+        if (ch >= C2H_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_engine_write(hermes,
+                                           &hermes->bar2.c2h[ch], addr, val);
+        }
         break;
     case 0x2:
         val = hermes_bar2_irq_write(hermes, addr, val);
@@ -878,10 +925,20 @@ static void hermes_bar2_write(void *opaque, hwaddr addr, uint64_t val,
         val = hermes_bar2_cfg_write(addr);
         break;
     case 0x4:
-        val = hermes_bar2_sgdma_write(hermes, &hermes->bar2.h2c, addr, val);
+        if (ch >= H2C_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_sgdma_write(hermes,
+                                          &hermes->bar2.h2c[ch], addr, val);
+        }
         break;
     case 0x5:
-        val = hermes_bar2_sgdma_write(hermes, &hermes->bar2.c2h, addr, val);
+        if (ch >= C2H_CHANNELS) {
+            hermes_bar_warn_invalid(2, addr);
+        } else {
+            val = hermes_bar2_sgdma_write(hermes,
+                                          &hermes->bar2.c2h[ch], addr, val);
+        }
         break;
     case 0x6:
         val = hermes_bar2_sgdma_common_write(addr);
@@ -964,20 +1021,37 @@ static void hermes_cleanup_msix(HermesState *hermes)
 
 static void hermes_instance_init(Object *obj)
 {
+    int i;
     HermesState *hermes = HERMES(obj);
     memcpy(&hermes->bar2, &bar2_init, sizeof(bar2_init));
+
+    for (i = 0; i < H2C_CHANNELS; i++) {
+        memcpy(&hermes->bar2.h2c[i], &h2c_init, sizeof(h2c_init));
+        hermes->bar2.h2c[i].irq_vector = i;
+        hermes->bar2.h2c[i].ch = i;
+        hermes->bar2.h2c[i].channel.identifier |= ((i << 8) & 0xF00);
+        sprintf(hermes->bar2.h2c[i].name, "h2c-dma-%u", i);
+    }
+
+    for (i = 0; i < C2H_CHANNELS; i++) {
+        memcpy(&hermes->bar2.c2h[i], &c2h_init, sizeof(c2h_init));
+        hermes->bar2.c2h[i].irq_vector = H2C_CHANNELS + i;
+        hermes->bar2.c2h[i].ch = i;
+        hermes->bar2.c2h[i].channel.identifier |= ((i << 8) & 0xF00);
+        sprintf(hermes->bar2.c2h[i].name, "c2h-dma-%u", i);
+    }
 }
 
 static void hermes_instance_finalize(Object *obj)
 {
 }
 
-static void hermes_bar2_init_dir_reg(HermesState *hermes,
-                                     struct hermes_bar2_dir_reg *dir)
+static void hermes_bar2_init_dir_reg(struct hermes_bar2_dir_reg *dir)
 {
     qemu_mutex_init(&dir->dma_mutex);
     qemu_cond_init(&dir->dma_cond);
-    qemu_thread_create(&dir->dma_thread, dir->name, dir->entry, hermes,
+
+    qemu_thread_create(&dir->dma_thread, dir->name, dir->entry, dir,
                        QEMU_THREAD_JOINABLE);
 }
 
@@ -992,6 +1066,7 @@ static void hermes_bar2_destroy_dir_reg(struct hermes_bar2_dir_reg *dir)
 
 static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
+    int i;
     HermesState *hermes = HERMES(pdev);
 
     memory_region_init_io(&hermes->bar0_mem_reg, OBJECT(hermes),
@@ -1019,17 +1094,29 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     hermes_init_msix(hermes, errp);
 
     hermes->stopping = false;
-    hermes_bar2_init_dir_reg(hermes, &hermes->bar2.h2c);
-    hermes_bar2_init_dir_reg(hermes, &hermes->bar2.c2h);
+
+    for (i = 0; i < H2C_CHANNELS; i++) {
+        hermes_bar2_init_dir_reg(&hermes->bar2.h2c[i]);
+    }
+
+    for (i = 0; i < C2H_CHANNELS; i++) {
+        hermes_bar2_init_dir_reg(&hermes->bar2.c2h[i]);
+    }
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
 {
+    int i;
     HermesState *hermes = HERMES(pdev);
 
     hermes->stopping = true;
-    hermes_bar2_destroy_dir_reg(&hermes->bar2.h2c);
-    hermes_bar2_destroy_dir_reg(&hermes->bar2.c2h);
+    for (i = 0; i < H2C_CHANNELS; i++) {
+        hermes_bar2_destroy_dir_reg(&hermes->bar2.h2c[i]);
+    }
+
+    for (i = 0; i < C2H_CHANNELS; i++) {
+        hermes_bar2_destroy_dir_reg(&hermes->bar2.c2h[i]);
+    }
 
     hermes_cleanup_msix(hermes);
 }
