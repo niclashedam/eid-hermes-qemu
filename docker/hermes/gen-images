@@ -12,6 +12,8 @@ NAME=${NAME:-hermes-vm}
 SIZE=${SIZE:-8}
 DIR=${DIR:-images}
 
+echo "Building rootfs and nvme images for eid-hermes-qemu..."
+
 cat << EOF > cloud-config-${NAME}
 #cloud-config
 hostname: ${NAME}

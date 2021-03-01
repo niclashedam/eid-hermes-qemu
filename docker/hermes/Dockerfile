@@ -41,15 +41,14 @@ ENV HERMES /opt/hermes
 RUN mkdir -p $HERMES
 
   # Clone the ubpf library so QEMU will build in a way that supports
-  # the hermes device model. Note that for now we clone a fork of
-  # upstream until a issue with stdbool.h is resolved.
+  # the hermes device model.
 
 RUN mkdir -p ${HERMES}/ubpf
 WORKDIR ${HERMES}/ubpf
 RUN git init && \
-  git remote add stephen https://github.com/sbates130272/ubpf.git && \
-  git fetch stephen && \
-  git checkout -b hermes stephen/stdbool-fix
+  git remote add origin https://github.com/iovisor/ubpf.git && \
+  git fetch origin && \
+  git checkout -b hermes 0014f298be3e2a63
 RUN make -C vm && \
   make -C vm install
 
