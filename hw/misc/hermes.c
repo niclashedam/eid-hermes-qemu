@@ -29,6 +29,8 @@
 #include "hw/pci/msix.h"
 #include "qapi/error.h"
 #include "trace.h"
+#include <ubpf.h>
+#include <elf.h>
 
 #define TYPE_PCI_HERMES_DEVICE "hermes"
 #define HERMES(obj)       OBJECT_CHECK(HermesState, obj, TYPE_PCI_HERMES_DEVICE)
@@ -38,6 +40,8 @@
 
 #define H2C_CHANNELS              4
 #define C2H_CHANNELS              4
+
+#define UBPF_ENGINES              4
 
 /*
  * We use the XDMA IP for interrupts. For details, see:
@@ -71,23 +75,23 @@
 
 typedef struct HermesState HermesState;
 
-static const struct hermes_bar0 {
-    uint32_t ehver;
-    char ehbld[48];
+static struct hermes_bar0 {
+    const uint32_t ehver;
+    const char ehbld[48];
 
-    uint8_t eheng;
-    uint8_t ehpslot;
-    uint8_t ehdslot;
-    uint8_t rsv0;
+    const uint8_t eheng;
+    const uint8_t ehpslot;
+    const uint8_t ehdslot;
+    const uint8_t rsv0;
 
-    uint32_t ehpsoff;
-    uint32_t ehpssze;
-    uint32_t ehdsoff;
-    uint32_t ehdssze;
+    const uint32_t ehpsoff;
+    const uint32_t ehpssze;
+    const uint32_t ehdsoff;
+    const uint32_t ehdssze;
 } bar0_init = {
     .ehver =  1,
     .ehbld = QEMU_PKGVERSION,
-    .eheng = 1,
+    .eheng = UBPF_ENGINES,
     .ehpslot = 16,
     .ehdslot = 16,
     .ehpsoff = 0,
@@ -159,6 +163,16 @@ struct hermes_bar2 {
     struct hermes_bar2_cfg_reg cfg;
 };
 
+struct hermes_ubpf_eng {
+    struct ubpf_vm *engine;
+    QemuCond bpf_cond;
+    QemuMutex bpf_mutex;
+    QemuThread bpf_thread;
+
+    int no;
+    char name[16];
+};
+
 struct HermesState {
     PCIDevice pdev;
     MemoryRegion bar0_mem_reg;
@@ -168,6 +182,8 @@ struct HermesState {
     struct hermes_bar2 bar2;
 
     bool stopping;
+
+    struct hermes_ubpf_eng ubpf[UBPF_ENGINES];
 };
 
 struct hermes_dma_desc {
@@ -1068,6 +1084,7 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 {
     int i;
     HermesState *hermes = HERMES(pdev);
+    Error *err = NULL;
 
     memory_region_init_io(&hermes->bar0_mem_reg, OBJECT(hermes),
                           &hermes_bar0_ops, hermes, "hermes-bar0",
@@ -1102,6 +1119,19 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
     for (i = 0; i < C2H_CHANNELS; i++) {
         hermes_bar2_init_dir_reg(&hermes->bar2.c2h[i]);
     }
+
+    for (i = 0; i < UBPF_ENGINES; i++) {
+        hermes->ubpf[i].engine = ubpf_create();
+        if (!hermes->ubpf[i].engine) {
+            error_setg(&err, "error creating uBPF engine");
+            error_propagate(errp, err);
+            return;
+        }
+
+        hermes->ubpf[i].no = i;
+
+        sprintf(hermes->ubpf[i].name, "ubpf-%u", i);
+    }
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
@@ -1116,6 +1146,10 @@ static void pci_hermes_uninit(PCIDevice *pdev)
 
     for (i = 0; i < C2H_CHANNELS; i++) {
         hermes_bar2_destroy_dir_reg(&hermes->bar2.c2h[i]);
+    }
+
+    for (i = 0; i < UBPF_ENGINES; i++) {
+        ubpf_destroy(hermes->ubpf[i].engine);
     }
 
     hermes_cleanup_msix(hermes);
