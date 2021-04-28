@@ -78,6 +78,18 @@
 #define HERMES_CMD_NOT_FINISHED   0x0
 #define HERMES_CMD_FINISHED       0x1
 
+#define HERMES_OPCODE_REQUEST_SLOT 0x00
+#define HERMES_OPCODE_RELEASE_SLOT 0x01
+#define HERMES_OPCODE_EXECUTE_SLOT 0x80
+
+#define HERMES_STATUS_SUCCESS           0x00
+#define HERMES_STATUS_OUT_OF_SPACE      0x01
+#define HERMES_STATUS_INVALID_PROG_SLOT 0x02
+#define HERMES_STATUS_INVALID_DATA_SLOT 0x03
+#define HERMES_STATUS_INVALID_ADDR      0x04
+#define HERMES_STATUS_EBPF_ERROR        0x05
+#define HERMES_STATUS_INVALID_OPCODE    0x06
+
 #define HERMES_BAR0_CMD_REQ    0x1000
 #define HERMES_BAR0_CMD_CTRL   0x2000
 
@@ -432,6 +444,11 @@ static inline void hermes_bar_warn_invalid(unsigned bar, hwaddr addr)
     warn_report("Hermes: Accessed invalid BAR%d register: 0x%lX", bar, addr);
 }
 
+static inline void hermes_bar_warn_invalid_command(int command, int engine)
+{
+    warn_report("Hermes: Invalid command 0x%X in engine %d", command, engine);
+}
+
 static inline void hermes_bar_warn_read_only(unsigned bar, hwaddr addr)
 {
     warn_report("Hermes: Tried to write to BAR%d read-only register: 0x%lX",
@@ -442,6 +459,105 @@ static inline void hermes_bar_warn_unimplemented(unsigned bar, hwaddr addr)
 {
     warn_report("Hermes: Accessed unimplemented BAR%d register: 0x%lX", bar,
                 addr);
+}
+
+static inline void mark_exec_finished(HermesState *hermes, int engine)
+{
+    bar0_init.cmdctrl[engine].ehcmddone = HERMES_CMD_FINISHED;
+    bar0_init.cmdctrl[engine].ehcmdexec = HERMES_CMD_STOP;
+    trace_hermes_msix_notify(H2C_CHANNELS + C2H_CHANNELS + engine);
+    msix_notify(PCI_DEVICE(hermes), H2C_CHANNELS + C2H_CHANNELS + engine);
+}
+
+static void hermes_exec(HermesState *hermes, int engine)
+{
+    struct hermes_cmd *command = &bar0_init.commands[engine];
+
+    void *bar4_base = memory_region_get_ram_ptr(&hermes->bar4_mem_reg);
+
+    char *errmsg;
+    int32_t rv;
+    uint64_t ret;
+    bool elf;
+
+    unsigned char prog_slot = command->req.prog_slot;
+    unsigned char data_slot = command->req.data_slot;
+
+    void *program_base = bar4_base + bar0_init.ehpsoff +
+                         (prog_slot * bar0_init.ehpssze);
+    void *data_base = bar4_base + bar0_init.ehdsoff +
+                      (data_slot * bar0_init.ehdssze);
+
+    command->res.cid = command->req.cid;
+
+    if (prog_slot >= bar0_init.ehpslot) {
+        command->res.status = HERMES_STATUS_INVALID_PROG_SLOT;
+        goto finish_exec;
+    }
+
+    if (data_slot >= bar0_init.ehdslot) {
+        command->res.status = HERMES_STATUS_INVALID_DATA_SLOT;
+        goto finish_exec;
+    }
+
+    if (command->req.opcode != HERMES_OPCODE_EXECUTE_SLOT) {
+        command->res.status = HERMES_STATUS_INVALID_OPCODE;
+        hermes_bar_warn_invalid_command(command->req.opcode, engine);
+        goto finish_exec;
+    }
+
+    /* If any code is already loaded, unload it */
+    ubpf_unload_code(hermes->ubpf[engine].engine);
+
+    /* Check magic number (first 4 bytes), to see if program is in ELF format */
+    elf = bar0_init.ehpssze >= SELFMAG
+          && !memcmp(program_base, ELFMAG, SELFMAG);
+    if (elf) {
+        rv = ubpf_load_elf(hermes->ubpf[engine].engine, program_base,
+                           command->req.prog_len, &errmsg);
+    } else {
+        rv = ubpf_load(hermes->ubpf[engine].engine, program_base,
+                       command->req.prog_len, &errmsg);
+    }
+
+    if (rv < 0) {
+        warn_report("%s", errmsg);
+        command->res.status = HERMES_STATUS_EBPF_ERROR;
+        command->res.ebpf_ret = rv;
+        goto finish_exec;
+    }
+
+    ret = ubpf_exec(hermes->ubpf[engine].engine, data_base, bar0_init.ehdssze);
+
+    if (ret == UINT64_MAX) {
+        command->res.status = HERMES_STATUS_EBPF_ERROR;
+    } else {
+        command->res.status = HERMES_STATUS_SUCCESS;
+    }
+
+    command->res.ebpf_ret = ret;
+
+finish_exec:
+    mark_exec_finished(hermes, engine);
+    return;
+}
+
+static void *hermes_bpf_thread(void *opaque)
+{
+    struct hermes_ubpf_eng *reg = opaque;
+    HermesState *hermes = container_of(reg, HermesState, ubpf[reg->no]);
+
+    qemu_mutex_lock(&reg->bpf_mutex);
+    while (1) {
+        qemu_cond_wait(&reg->bpf_cond, &reg->bpf_mutex);
+        if (hermes->stopping) {
+            break;
+        }
+        hermes_exec(hermes, reg->no);
+    }
+    qemu_mutex_unlock(&reg->bpf_mutex);
+
+    return NULL;
 }
 
 static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
@@ -506,6 +622,14 @@ static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
         } else if (offset != 0) {
             hermes_bar_warn_read_only(0, addr);
             return;
+        }
+
+        if (val == HERMES_CMD_START) {
+            bar0_init.cmdctrl[engine].ehcmddone = HERMES_CMD_NOT_FINISHED;
+            qemu_mutex_lock(&hermes->ubpf[engine].bpf_mutex);
+            qemu_cond_signal(&hermes->ubpf[engine].bpf_cond);
+            qemu_mutex_unlock(&hermes->ubpf[engine].bpf_mutex);
+            bar0_init.cmdctrl[engine].ehcmdexec = HERMES_CMD_STOP;
         }
     } else if (addr + size > 0x48) {
         hermes_bar_warn_invalid(0, addr);
@@ -1216,6 +1340,15 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
         hermes->ubpf[i].no = i;
 
         sprintf(hermes->ubpf[i].name, "ubpf-%u", i);
+
+        qemu_mutex_init(&hermes->ubpf[i].bpf_mutex);
+        qemu_cond_init(&hermes->ubpf[i].bpf_cond);
+
+        qemu_thread_create(&hermes->ubpf[i].bpf_thread,
+            hermes->ubpf[i].name,
+            &hermes_bpf_thread,
+            &hermes->ubpf[i],
+            QEMU_THREAD_JOINABLE);
     }
 
     memset(&bar0_init.cmdctrl, 0, UBPF_ENGINES
@@ -1240,6 +1373,11 @@ static void pci_hermes_uninit(PCIDevice *pdev)
 
     for (i = 0; i < UBPF_ENGINES; i++) {
         ubpf_destroy(hermes->ubpf[i].engine);
+
+        qemu_cond_signal(&hermes->ubpf[i].bpf_cond);
+        qemu_thread_join(&hermes->ubpf[i].bpf_thread);
+        qemu_cond_destroy(&hermes->ubpf[i].bpf_cond);
+        qemu_mutex_destroy(&hermes->ubpf[i].bpf_mutex);
     }
 
     hermes_cleanup_msix(hermes);
