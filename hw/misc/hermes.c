@@ -73,7 +73,49 @@
 #define W1S(old, new) ((old) | (new))
 #define W1C(old, new) ((old) & ~(new))
 
+#define HERMES_CMD_STOP           0x0
+#define HERMES_CMD_START          0x1
+#define HERMES_CMD_NOT_FINISHED   0x0
+#define HERMES_CMD_FINISHED       0x1
+
+#define HERMES_BAR0_CMD_REQ    0x1000
+#define HERMES_BAR0_CMD_CTRL   0x2000
+
 typedef struct HermesState HermesState;
+
+struct __attribute__((__packed__)) hermes_cmd_req {
+    uint8_t opcode;
+    uint8_t rsv0;
+    uint16_t cid;
+    uint32_t rsv1;
+
+    uint8_t prog_slot;
+    uint8_t data_slot;
+    uint16_t rsv2;
+    uint32_t prog_len;
+
+    uint8_t rsv3[16];
+};
+
+struct __attribute__((__packed__)) hermes_cmd_res {
+    uint16_t cid;
+    uint8_t status;
+    uint8_t rsv[5];
+
+    uint64_t ebpf_ret;
+};
+
+struct __attribute__((__packed__)) hermes_cmd
+{
+    struct hermes_cmd_req req;
+    struct hermes_cmd_res res;
+};
+
+struct __attribute__((__packed__)) hermes_cmd_ctrl {
+    uint8_t ehcmdexec;
+    uint8_t ehcmddone;
+    uint8_t rsv[6];
+};
 
 static struct hermes_bar0 {
     const uint32_t ehver;
@@ -88,6 +130,9 @@ static struct hermes_bar0 {
     const uint32_t ehpssze;
     const uint32_t ehdsoff;
     const uint32_t ehdssze;
+
+    struct hermes_cmd commands[UBPF_ENGINES];
+    struct hermes_cmd_ctrl cmdctrl[UBPF_ENGINES];
 } bar0_init = {
     .ehver =  1,
     .ehbld = QEMU_PKGVERSION,
@@ -404,7 +449,7 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
     uint32_t *ptr;
     uint32_t val = 0;
 
-    if (addr + size <= sizeof(struct hermes_bar0)) {
+    if (addr + size <= 0x48) {
         ptr = (uint32_t *) &((uint8_t *) &bar0_init)[addr];
         val = *ptr;
         switch (size) {
@@ -415,6 +460,18 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
             val &= 0xFFFF;
             break;
         }
+    } else if (addr >= HERMES_BAR0_CMD_REQ &&
+               addr + size <= HERMES_BAR0_CMD_REQ +
+               sizeof(struct hermes_cmd) * UBPF_ENGINES) {
+        ptr = (uint32_t *) &((uint8_t *) &bar0_init.commands)
+              [addr - HERMES_BAR0_CMD_REQ];
+        val = *ptr;
+    } else if (addr >= HERMES_BAR0_CMD_CTRL && addr + size
+               <= HERMES_BAR0_CMD_CTRL +
+               sizeof(struct hermes_cmd_ctrl) * UBPF_ENGINES) {
+        ptr = (uint32_t *) &((uint8_t *) &bar0_init.cmdctrl)
+              [addr - HERMES_BAR0_CMD_CTRL];
+        val = *ptr;
     } else {
         hermes_bar_warn_invalid(0, addr);
     }
@@ -422,11 +479,39 @@ static uint64_t hermes_bar0_read(void *opaque, hwaddr addr, unsigned size)
     return val;
 }
 
-/* BAR 0 is read-only */
+/* BAR 0 is partly read-only */
 static void hermes_bar0_write(void *opaque, hwaddr addr, uint64_t val,
                 unsigned size)
 {
-    hermes_bar_warn_read_only(0, addr);
+    int engine, offset;
+    HermesState *hermes = opaque;
+
+    if (addr >= HERMES_BAR0_CMD_REQ && addr < HERMES_BAR0_CMD_CTRL) {
+        engine = (addr - HERMES_BAR0_CMD_REQ) / sizeof(struct hermes_cmd);
+        offset = (addr - HERMES_BAR0_CMD_REQ) % sizeof(struct hermes_cmd);
+
+        if (engine > UBPF_ENGINES - 1) {
+            hermes_bar_warn_invalid(0, addr);
+            return;
+        }
+
+        memcpy((void *) &bar0_init.commands[engine] + offset, &val, size);
+    } else if (addr >= HERMES_BAR0_CMD_CTRL) {
+        engine = (addr - HERMES_BAR0_CMD_CTRL) / sizeof(struct hermes_cmd_ctrl);
+        offset = (addr - HERMES_BAR0_CMD_CTRL) % sizeof(struct hermes_cmd_ctrl);
+
+        if (engine > UBPF_ENGINES - 1 || offset >= 2) {
+            hermes_bar_warn_invalid(0, addr);
+            return;
+        } else if (offset != 0) {
+            hermes_bar_warn_read_only(0, addr);
+            return;
+        }
+    } else if (addr + size > 0x48) {
+        hermes_bar_warn_invalid(0, addr);
+    } else {
+        hermes_bar_warn_read_only(0, addr);
+    }
 }
 
 static const MemoryRegionOps hermes_bar0_ops = {
@@ -1132,6 +1217,11 @@ static void pci_hermes_realize(PCIDevice *pdev, Error **errp)
 
         sprintf(hermes->ubpf[i].name, "ubpf-%u", i);
     }
+
+    memset(&bar0_init.cmdctrl, 0, UBPF_ENGINES
+                                  * sizeof(struct hermes_cmd_ctrl));
+    memset(&bar0_init.commands, 0, UBPF_ENGINES
+                                  * sizeof(struct hermes_cmd));
 }
 
 static void pci_hermes_uninit(PCIDevice *pdev)
