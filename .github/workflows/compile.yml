@@ -1,0 +1,27 @@
+name: compile test
+
+on:
+  pull_request:
+    branches:
+      - hermes
+
+jobs:
+   compile:
+     runs-on: ubuntu-20.04
+     env:
+       UBPF_SHA: 0014f298be3e2a636fd6243908238fb027527e28
+     steps:
+       - uses: actions/checkout@v2
+         with:
+           ref: ${{ github.event.pull_request.head.sha }}
+       - name: Install uBPF
+         run: |
+           wget https://github.com/iovisor/ubpf/archive/${{ env.UBPF_SHA }}.zip
+           unzip ${{ env.UBPF_SHA }}.zip
+           cd ubpf-${{ env.UBPF_SHA }}
+           make -C vm
+           sudo make -C vm install
+       - name: Compile QEMU
+         run: |
+           ./configure --target-list=x86_64-softmmu --enable-libubpf
+           make -j$(nproc)
